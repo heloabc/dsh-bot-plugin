@@ -27,7 +27,6 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-          registry-url: https://registry.npmjs.org
           cache: npm
           cache-dependency-path: |
             package-lock.json
@@ -52,6 +51,9 @@ jobs:
       - name: Publish the next 0.1.0 beta
         run: |
           node .github/next-beta-version.mjs
+          # setup-node and the GitHub token must not authenticate this publish.
+          # Trusted publishing uses the OIDC token only when NODE_AUTH_TOKEN is unset.
+          unset NODE_AUTH_TOKEN
           for attempt in 1 2 3 4 5; do
             set +e
             log=$(npm publish --tag beta --access public 2>&1)
