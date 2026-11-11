@@ -277,7 +277,7 @@ function boot(options: {
 	let meta;
 	(browser.window as { __ModuleLoader__?: { load: (value: { id: string, factory: (...args: unknown[]) => unknown }) => void } }).__ModuleLoader__ = { load: (value) => (meta = value) };
 	vm.runInThisContext(`(() => { ${source} })();`, { filename: 'client.js' });
-	assert.equal(meta!.id, '@thready-web/dsh-bot');
+	assert.equal(meta!.id, '@thready-web/dsh-bot-plugin');
 	const exported = meta!.factory(() => {
 		throw new Error('the router must not require platform modules');
 	});

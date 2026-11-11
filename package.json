@@ -1,15 +1,12 @@
 {
-  "name": "@thready-web/dsh-bot",
+  "name": "@thready-web/dsh-bot-plugin",
   "version": "0.1.0-beta.0",
   "type": "module",
-  "description": "DSH bot: session persona, memory, work, hash routing, and the workbench. Pinned to @deepseek-ai/dsh 0.2.2-rc.1.",
+  "description": "DSH bot plugin: session persona, memory, work, hash routing, and the workbench. Pinned to @deepseek-ai/dsh 0.2.2-rc.1.",
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/thready-web/dsh-bot.git"
-  },
-  "bin": {
-    "dsh-bot": "./dist/cli.js"
+    "url": "git+https://github.com/thready-web/dsh-bot-plugin.git"
   },
   "exports": {
     ".": "./dist/index.js",
@@ -17,6 +14,7 @@
     "./router": "./dist/router-plugin.js",
     "./client": "./client.js",
     "./engine": "./dist/engine.js",
+    "./cli": "./dist/cli.js",
     "./package.json": "./package.json"
   },
   "files": [

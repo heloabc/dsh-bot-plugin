@@ -24,7 +24,7 @@
  * Bundled for the DSH client loader; no rendering, no slots.
  */
 window.__ModuleLoader__.load({
-	id: '@thready-web/dsh-bot',
+	id: '@thready-web/dsh-bot-plugin',
 	factory: (require) => {
 		var module = { exports: {} };
 		var exports = module.exports;

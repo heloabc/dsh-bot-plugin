@@ -80,5 +80,5 @@ jobs:
           version=$(node --input-type=module -e "import {readFileSync} from 'node:fs'; process.stdout.write(JSON.parse(readFileSync('package.json','utf8')).version)")
           gh release create "v${version}" \
             --title "v${version}" \
-            --notes "Beta published to npm as \`@thready-web/dsh-bot@${version}\`." \
+            --notes "Beta published to npm as \`@thready-web/dsh-bot-plugin@${version}\`." \
             --prerelease
