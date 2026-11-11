@@ -15,7 +15,10 @@ const empty = {
 test('a new session always binds a persona and skips blank optional steps', () => {
   assert.deepEqual(setupSteps(empty), ['persona'])
   assert.deepEqual(setupSteps({ ...empty, fact: ' The user is called Ada ' }), ['persona', 'fact'])
-  assert.deepEqual(setupSteps({ ...empty, targetSessionId: 'session-b', message: 'just this line' }), ['persona', 'message'])
+  assert.deepEqual(setupSteps({ ...empty, targetSessionId: 'session-b', message: 'just this line' }), [
+    'persona',
+    'message',
+  ])
   assert.deepEqual(setupSteps({ ...empty, message: 'no target' }), ['persona'])
   assert.deepEqual(setupSteps({ ...empty, runAt: '2026-11-08T17:20' }), ['persona', 'timer'])
 })
@@ -32,7 +35,11 @@ test('a bot persona keeps name, style, and task on their own lines', () => {
   const text = composeBotPersona('Scout', 'brief', 'shorten the line')
   assert.equal(text, 'Name: Scout\n\nStyle: brief\n\nTask: shorten the line')
   assert.deepEqual(botFields(text), { name: 'Scout', style: 'brief', task: 'shorten the line' })
-  assert.deepEqual(botFields('名字：Scout\n\n风格：brief\n\n任务：shorten the line'), { name: 'Scout', style: 'brief', task: 'shorten the line' })
+  assert.deepEqual(botFields('名字：Scout\n\n风格：brief\n\n任务：shorten the line'), {
+    name: 'Scout',
+    style: 'brief',
+    task: 'shorten the line',
+  })
   assert.equal(composeBotPersona('Scout', '', ''), 'Name: Scout')
 })
 

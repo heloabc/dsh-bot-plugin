@@ -1,4 +1,5 @@
-import { readFileSync, writeFileSync } from 'node:fs'
+import { spawnSync } from 'node:child_process'
+import { readFileSync } from 'node:fs'
 
 const base = '0.1.0'
 const pattern = new RegExp(`^${base.replaceAll('.', '\\.')}-beta\\.(\\d+)$`)
@@ -24,5 +25,8 @@ if (bump) {
   }
 }
 pkg.version = `${base}-beta.${next}`
-writeFileSync('package.json', `${JSON.stringify(pkg, null, 2)}\n`)
+const result = spawnSync('npm', ['version', pkg.version, '--no-git-tag-version', '--allow-same-version'], {
+  stdio: 'inherit',
+})
+if (result.status !== 0) process.exit(result.status ?? 1)
 console.log(pkg.version)

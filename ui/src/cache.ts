@@ -41,7 +41,9 @@ export function memoryCache(): ChunkCache {
   let used = 0
   const events = new Map<string, Map<number, CachedEvent>>()
   return {
-    async open() { return 'ready' },
+    async open() {
+      return 'ready'
+    },
     async present(hashes) {
       return new Set(hashes.filter(hash => chunks.has(hash)))
     },
@@ -137,20 +139,24 @@ export function idbCache(): ChunkCache {
       const db = await openDb()
       const found = new Set<string>()
       const store = db.transaction('chunks', 'readonly').objectStore('chunks')
-      await Promise.all(hashes.map(async hash => {
-        const body = bytesOf(await requestToPromise(store.get(hash)))
-        if (body) found.add(hash)
-      }))
+      await Promise.all(
+        hashes.map(async hash => {
+          const body = bytesOf(await requestToPromise(store.get(hash)))
+          if (body) found.add(hash)
+        }),
+      )
       return found
     },
     async readChunks(hashes) {
       const db = await openDb()
       const out = new Map<string, Uint8Array>()
       const store = db.transaction('chunks', 'readonly').objectStore('chunks')
-      await Promise.all(hashes.map(async hash => {
-        const body = bytesOf(await requestToPromise(store.get(hash)))
-        if (body) out.set(hash, body)
-      }))
+      await Promise.all(
+        hashes.map(async hash => {
+          const body = bytesOf(await requestToPromise(store.get(hash)))
+          if (body) out.set(hash, body)
+        }),
+      )
       return out
     },
     async putChunks(incoming) {
@@ -174,7 +180,9 @@ export function idbCache(): ChunkCache {
       const rows = await requestToPromise(index.getAll(sessionId))
       if (!Array.isArray(rows)) return []
       return rows
-        .filter((row): row is CachedEvent => !!row && typeof row === 'object' && typeof (row as CachedEvent).seq === 'number')
+        .filter(
+          (row): row is CachedEvent => !!row && typeof row === 'object' && typeof (row as CachedEvent).seq === 'number',
+        )
         .sort((left, right) => left.seq - right.seq)
     },
     async putEvents(sessionId, rows) {
@@ -204,19 +212,39 @@ export function browserCache(): ChunkCache {
       return status === 'ready' ? status : fallback.open()
     },
     async present(hashes) {
-      try { return await primary.present(hashes) } catch { return fallback.present(hashes) }
+      try {
+        return await primary.present(hashes)
+      } catch {
+        return fallback.present(hashes)
+      }
     },
     async readChunks(hashes) {
-      try { return await primary.readChunks(hashes) } catch { return fallback.readChunks(hashes) }
+      try {
+        return await primary.readChunks(hashes)
+      } catch {
+        return fallback.readChunks(hashes)
+      }
     },
     async putChunks(chunks) {
-      try { await primary.putChunks(chunks) } catch { await fallback.putChunks(chunks) }
+      try {
+        await primary.putChunks(chunks)
+      } catch {
+        await fallback.putChunks(chunks)
+      }
     },
     async readEvents(sessionId) {
-      try { return await primary.readEvents(sessionId) } catch { return fallback.readEvents(sessionId) }
+      try {
+        return await primary.readEvents(sessionId)
+      } catch {
+        return fallback.readEvents(sessionId)
+      }
     },
     async putEvents(sessionId, events) {
-      try { await primary.putEvents(sessionId, events) } catch { await fallback.putEvents(sessionId, events) }
+      try {
+        await primary.putEvents(sessionId, events)
+      } catch {
+        await fallback.putEvents(sessionId, events)
+      }
     },
   }
 }

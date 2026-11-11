@@ -10,7 +10,7 @@ const MAX_ENTRIES = 500
 /**
  * @param {string} file
  */
-export function openSessionPreviews(file) {
+export function openSessionPreviews(file: string) {
   mkdirSync(dirname(file), { recursive: true, mode: 0o700 })
   let state: Record<string, string> = {}
   try {
@@ -33,7 +33,10 @@ export function openSessionPreviews(file) {
      * @param {unknown} preview
      * @returns {{ ok: true, preview: string } | { ok: false, error: 'bad_session' | 'empty_preview' }}
      */
-    remember(sessionId, preview) {
+    remember(
+      sessionId: unknown,
+      preview: unknown,
+    ): { ok: true; preview: string } | { ok: false; error: 'bad_session' | 'empty_preview' } {
       if (typeof sessionId !== 'string' || !SESSION_ID.test(sessionId)) return { ok: false, error: 'bad_session' }
       const text = cleanPreview(preview)
       if (text === '') return { ok: false, error: 'empty_preview' }
@@ -47,7 +50,7 @@ export function openSessionPreviews(file) {
      * Skip bad rows. A browser cache can contain ids this store will not keep.
      * @param {unknown} incoming
      */
-    rememberAll(incoming) {
+    rememberAll(incoming: unknown) {
       if (!incoming || typeof incoming !== 'object' || Array.isArray(incoming)) return { stored: 0 }
       let changed = false
       let stored = 0
@@ -67,7 +70,7 @@ export function openSessionPreviews(file) {
     /**
      * @param {string} sessionId
      */
-    forget(sessionId) {
+    forget(sessionId: string) {
       if (!Object.prototype.hasOwnProperty.call(state, sessionId)) return
       delete state[sessionId]
       save()
@@ -79,9 +82,9 @@ export function openSessionPreviews(file) {
  * @param {unknown} parsed
  * @returns {Record<string, string>}
  */
-function sanitize(parsed) {
+function sanitize(parsed: unknown): Record<string, string> {
   /** @type {Record<string, string>} */
-  const out = {}
+  const out: Record<string, string> = {}
   if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return out
   for (const [sessionId, preview] of Object.entries(parsed)) {
     if (!SESSION_ID.test(sessionId)) continue
@@ -95,7 +98,11 @@ function sanitize(parsed) {
 /**
  * @param {unknown} value
  */
-function cleanPreview(value) {
+function cleanPreview(value: unknown) {
   if (typeof value !== 'string') return ''
-  return value.replace(/[\u0000-\u001f]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, MAX_PREVIEW)
+  return value
+    .replace(/[\u0000-\u001f]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, MAX_PREVIEW)
 }

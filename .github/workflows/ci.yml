@@ -1,0 +1,65 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            ui/package-lock.json
+
+      - name: Install
+        run: |
+          npm ci
+          npm ci --prefix ui
+
+      - name: Test
+        run: npm test
+
+      - name: Typecheck
+        run: |
+          npm run type-check
+          npm run type-check --prefix ui
+
+      - name: Format
+        run: npm run format:check
+
+      - name: Build
+        run: |
+          npm run build
+          npm run build --prefix ui
+
+  host:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            ui/package-lock.json
+
+      - name: Install
+        run: npm ci
+
+      - name: Install the pinned DSH host
+        run: npm install --prefix "$RUNNER_TEMP/dsh-host" @deepseek-ai/dsh@0.2.2-rc.1
+
+      - name: Host integration
+        env:
+          DSH_BIN: ${{ runner.temp }}/dsh-host/node_modules/@deepseek-ai/dsh/lib/bin.js
+        run: npm run test:host

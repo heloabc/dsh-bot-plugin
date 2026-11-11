@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto'
-import { toolError, asStoreFailure } from './errors.ts'
+import { toolError, asStoreFailure, type ToolPayload } from './errors.ts'
 import { syncFactFts, syncMemoryFts, EMPTY_STATE } from './engine.ts'
 
 const OUTPUT = {
@@ -8,7 +8,7 @@ const OUTPUT = {
     properties: { ok: { type: 'boolean' } },
     required: ['ok'],
   },
-  render(_args, value) {
+  render(_args: unknown, value: unknown) {
     return [{ type: 'text', text: JSON.stringify(value) }]
   },
 }
@@ -17,117 +17,197 @@ const OUTPUT = {
  * @param {import('./engine.js').Engine} engine
  * @param {() => number} [viewRevision]
  */
-export function toolDefinitions(engine, viewRevision = () => 0) {
-  const revision = (hostId) => {
+export function toolDefinitions(engine: import('./engine.ts').Engine, viewRevision: () => number = () => 0) {
+  const revision = (hostId: string) => {
     const injected = viewRevision()
     return injected > 0 ? injected : currentRevision(engine, hostId)
   }
   return [
-    tool('foundations_recall', 'Search facts and long-term memories that are still active in this session. Forgotten, superseded, and unconfirmed rows are omitted.', {
-      type: 'object',
-      properties: {
-        query: { type: 'string', description: 'Search text' },
-        limit: { type: 'integer', description: 'Default 5, maximum 20' },
-        sessionId: { type: 'string', description: 'Ignored. The host binds the session.' },
+    tool(
+      'foundations_recall',
+      'Search facts and long-term memories that are still active in this session. Forgotten, superseded, and unconfirmed rows are omitted.',
+      {
+        type: 'object',
+        properties: {
+          query: { type: 'string', description: 'Search text' },
+          limit: { type: 'integer', description: 'Default 5, maximum 20' },
+          sessionId: { type: 'string', description: 'Ignored. The host binds the session.' },
+        },
+        required: ['query'],
       },
-      required: ['query'],
-    }, async (args, hostId) => {
-      const limit = Math.min(20, Math.max(1, Number.isInteger(args.limit) ? args.limit : 5))
-      if (typeof args.query !== 'string' || args.query.trim() === '') return toolError('VALIDATION', 'query is required.')
-      const found = engine.recall(hostId, args.query.trim(), limit)
-      return ok(revision(hostId), 0, found)
-    }),
-    tool('foundations_remember', 'Store one fact or long-term memory as active. An idempotency key is required.', {
-      type: 'object',
-      properties: {
-        target: { type: 'string', enum: ['fact', 'memory'] },
-        content: { type: 'string' },
-        title: { type: 'string' },
-        priority: { type: 'integer' },
-        sourceEventId: { type: 'string' },
-        idempotencyKey: { type: 'string' },
-        sessionId: { type: 'string', description: 'Ignored. The host binds the session.' },
+      async (args, hostId) => {
+        const requested = args.limit
+        const limit = Math.min(
+          20,
+          Math.max(1, typeof requested === 'number' && Number.isInteger(requested) ? requested : 5),
+        )
+        if (typeof args.query !== 'string' || args.query.trim() === '')
+          return toolError('VALIDATION', 'query is required.')
+        const found = engine.recall(hostId, args.query.trim(), limit)
+        return ok(revision(hostId), 0, found)
       },
-      required: ['target', 'content', 'idempotencyKey'],
-    }, async (args, hostId) => write(engine, hostId, 'foundations_remember', args, () => revision(hostId), () => {
-      if (args.target !== 'fact' && args.target !== 'memory') return toolError('VALIDATION', 'target must be fact or memory.')
-      if (typeof args.content !== 'string' || args.content.trim() === '') return toolError('VALIDATION', 'content is required.')
-      const sourceError = engine.checkSource(hostId, args.sourceEventId)
-      if (sourceError) return sourceError
-      const created = nowIso()
-      if (args.target === 'fact') {
-        const priority = Number.isInteger(args.priority) ? args.priority : 100
-        const info = engine.store.db.prepare(`
+    ),
+    tool(
+      'foundations_remember',
+      'Store one fact or long-term memory as active. An idempotency key is required.',
+      {
+        type: 'object',
+        properties: {
+          target: { type: 'string', enum: ['fact', 'memory'] },
+          content: { type: 'string' },
+          title: { type: 'string' },
+          priority: { type: 'integer' },
+          sourceEventId: { type: 'string' },
+          idempotencyKey: { type: 'string' },
+          sessionId: { type: 'string', description: 'Ignored. The host binds the session.' },
+        },
+        required: ['target', 'content', 'idempotencyKey'],
+      },
+      async (args, hostId) =>
+        write(
+          engine,
+          hostId,
+          'foundations_remember',
+          args,
+          () => revision(hostId),
+          () => {
+            if (args.target !== 'fact' && args.target !== 'memory')
+              return toolError('VALIDATION', 'target must be fact or memory.')
+            if (typeof args.content !== 'string' || args.content.trim() === '')
+              return toolError('VALIDATION', 'content is required.')
+            const sourceError = engine.checkSource(hostId, args.sourceEventId)
+            if (sourceError) return sourceError
+            const created = nowIso()
+            if (args.target === 'fact') {
+              const priority = Number.isInteger(args.priority) ? args.priority : 100
+              const info = engine.store.db
+                .prepare(`
           INSERT INTO facts (
             session_id, kind, content, status, source_event_id, source_type, revision, priority, created_at, updated_at
           ) VALUES (?, 'user_fact', ?, 'active', ?, 'explicit_tool', 1, ?, ?, ?)
-        `).run(hostId, args.content, args.sourceEventId ?? null, priority, created, created)
-        const id = Number(info.lastInsertRowid)
-        syncFactFts(engine.store.db, id, args.content, true)
-        return ok(revision(hostId), 1, { id, target: 'fact', revision: 1 })
-      }
-      const info = engine.store.db.prepare(`
+        `)
+                .run(hostId, args.content, args.sourceEventId ?? null, priority, created, created)
+              const id = Number(info.lastInsertRowid)
+              syncFactFts(engine.store.db, id, args.content, true)
+              return ok(revision(hostId), 1, { id, target: 'fact', revision: 1 })
+            }
+            const info = engine.store.db
+              .prepare(`
         INSERT INTO memories (
           session_id, title, content, status, source_event_id, source_type, revision, created_at, updated_at
         ) VALUES (?, ?, ?, 'active', ?, 'explicit_tool', 1, ?, ?)
-      `).run(hostId, typeof args.title === 'string' ? args.title : null, args.content, args.sourceEventId ?? null, created, created)
-      const id = Number(info.lastInsertRowid)
-      syncMemoryFts(engine.store.db, id, typeof args.title === 'string' ? args.title : '', args.content, true)
-      return ok(revision(hostId), 1, { id, target: 'memory', revision: 1 })
-    })),
-    tool('foundations_correct', 'Replace one still-active fact or memory with a new row. expectedRevision is required.', {
-      type: 'object',
-      properties: {
-        target: { type: 'string', enum: ['fact', 'memory'] },
-        id: { type: 'integer' },
-        content: { type: 'string' },
-        title: { type: 'string' },
-        expectedRevision: { type: 'integer' },
-        idempotencyKey: { type: 'string' },
-        sessionId: { type: 'string', description: 'Ignored. The host binds the session.' },
+      `)
+              .run(
+                hostId,
+                typeof args.title === 'string' ? args.title : null,
+                args.content,
+                args.sourceEventId ?? null,
+                created,
+                created,
+              )
+            const id = Number(info.lastInsertRowid)
+            syncMemoryFts(engine.store.db, id, typeof args.title === 'string' ? args.title : '', args.content, true)
+            return ok(revision(hostId), 1, { id, target: 'memory', revision: 1 })
+          },
+        ),
+    ),
+    tool(
+      'foundations_correct',
+      'Replace one still-active fact or memory with a new row. expectedRevision is required.',
+      {
+        type: 'object',
+        properties: {
+          target: { type: 'string', enum: ['fact', 'memory'] },
+          id: { type: 'integer' },
+          content: { type: 'string' },
+          title: { type: 'string' },
+          expectedRevision: { type: 'integer' },
+          idempotencyKey: { type: 'string' },
+          sessionId: { type: 'string', description: 'Ignored. The host binds the session.' },
+        },
+        required: ['target', 'id', 'content', 'expectedRevision', 'idempotencyKey'],
       },
-      required: ['target', 'id', 'content', 'expectedRevision', 'idempotencyKey'],
-    }, async (args, hostId) => write(engine, hostId, 'foundations_correct', args, () => revision(hostId), () => correct(engine, hostId, args))),
-    tool('foundations_forget', 'Mark one fact or memory forgotten and drop it from search. The original log is not deleted.', {
-      type: 'object',
-      properties: {
-        target: { type: 'string', enum: ['fact', 'memory'] },
-        id: { type: 'integer' },
-        expectedRevision: { type: 'integer' },
-        idempotencyKey: { type: 'string' },
-        sessionId: { type: 'string', description: 'Ignored. The host binds the session.' },
+      async (args, hostId) =>
+        write(
+          engine,
+          hostId,
+          'foundations_correct',
+          args,
+          () => revision(hostId),
+          () => correct(engine, hostId, args),
+        ),
+    ),
+    tool(
+      'foundations_forget',
+      'Mark one fact or memory forgotten and drop it from search. The original log is not deleted.',
+      {
+        type: 'object',
+        properties: {
+          target: { type: 'string', enum: ['fact', 'memory'] },
+          id: { type: 'integer' },
+          expectedRevision: { type: 'integer' },
+          idempotencyKey: { type: 'string' },
+          sessionId: { type: 'string', description: 'Ignored. The host binds the session.' },
+        },
+        required: ['target', 'id', 'expectedRevision', 'idempotencyKey'],
       },
-      required: ['target', 'id', 'expectedRevision', 'idempotencyKey'],
-    }, async (args, hostId) => write(engine, hostId, 'foundations_forget', args, () => revision(hostId), () => forget(engine, hostId, args))),
-    tool('foundations_state_update', 'Patch the working draft for this session. expectedRevision is required.', {
-      type: 'object',
-      properties: {
-        expectedRevision: { type: 'integer' },
-        patch: { type: 'object' },
-        idempotencyKey: { type: 'string' },
-        sessionId: { type: 'string', description: 'Ignored. The host binds the session.' },
+      async (args, hostId) =>
+        write(
+          engine,
+          hostId,
+          'foundations_forget',
+          args,
+          () => revision(hostId),
+          () => forget(engine, hostId, args),
+        ),
+    ),
+    tool(
+      'foundations_state_update',
+      'Patch the working draft for this session. expectedRevision is required.',
+      {
+        type: 'object',
+        properties: {
+          expectedRevision: { type: 'integer' },
+          patch: { type: 'object' },
+          idempotencyKey: { type: 'string' },
+          sessionId: { type: 'string', description: 'Ignored. The host binds the session.' },
+        },
+        required: ['expectedRevision', 'patch', 'idempotencyKey'],
       },
-      required: ['expectedRevision', 'patch', 'idempotencyKey'],
-    }, async (args, hostId) => write(engine, hostId, 'foundations_state_update', args, () => revision(hostId), () => updateState(engine, hostId, args))),
-    tool('foundations_skill_load', 'Read the text of an enabled, non-revoked skill in this session. This does not grant tools.', {
-      type: 'object',
-      properties: {
-        skillId: { type: 'string' },
-        sessionId: { type: 'string', description: 'Ignored. The host binds the session.' },
+      async (args, hostId) =>
+        write(
+          engine,
+          hostId,
+          'foundations_state_update',
+          args,
+          () => revision(hostId),
+          () => updateState(engine, hostId, args),
+        ),
+    ),
+    tool(
+      'foundations_skill_load',
+      'Read the text of an enabled, non-revoked skill in this session. This does not grant tools.',
+      {
+        type: 'object',
+        properties: {
+          skillId: { type: 'string' },
+          sessionId: { type: 'string', description: 'Ignored. The host binds the session.' },
+        },
+        required: ['skillId'],
       },
-      required: ['skillId'],
-    }, async (args, hostId) => {
-      if (typeof args.skillId !== 'string') return toolError('VALIDATION', 'skillId is invalid.')
-      const loaded = engine.loadSkill(hostId, args.skillId)
-      if (loaded.ok === false) return loaded
-      return {
-        ok: true,
-        outcome: 'applied',
-        viewRevisionFrozen: revision(hostId),
-        storeRevision: 0,
-        data: loaded.data,
-      }
-    }),
+      async (args, hostId) => {
+        if (typeof args.skillId !== 'string') return toolError('VALIDATION', 'skillId is invalid.')
+        const loaded = engine.loadSkill(hostId, args.skillId)
+        if (loaded.ok === false) return loaded
+        return {
+          ok: true,
+          outcome: 'applied',
+          viewRevisionFrozen: revision(hostId),
+          storeRevision: 0,
+          data: loaded.data,
+        }
+      },
+    ),
   ]
 }
 
@@ -135,17 +215,26 @@ export function toolDefinitions(engine, viewRevision = () => 0) {
  * @param {string} name
  * @param {string} description
  * @param {Record<string, unknown>} parameters
- * @param {(args: Record<string, unknown>, hostId: string) => Promise<unknown>} run
+ * @param {(args: Record<string, unknown>, hostId: string) => Promise<ToolPayload>} run
  */
-function tool(name, description, parameters, run) {
+function tool(
+  name: string,
+  description: string,
+  parameters: Record<string, unknown>,
+  run: (args: Record<string, unknown>, hostId: string) => Promise<ToolPayload>,
+) {
   return {
     name,
     description,
     parameters,
     output: OUTPUT,
-    async execute(args, exec) {
+    async execute(
+      args: Record<string, unknown> | null | undefined,
+      exec: { agent?: { id?: string }; signal?: AbortSignal } | null | undefined,
+    ): Promise<ToolPayload> {
       const hostId = exec?.agent?.id
-      if (typeof hostId !== 'string' || hostId === '') return toolError('UNAVAILABLE', 'The host did not bind a sessionId.')
+      if (typeof hostId !== 'string' || hostId === '')
+        return toolError('UNAVAILABLE', 'The host did not bind a sessionId.')
       try {
         return publish(await run(args ?? {}, hostId))
       } catch (error) {
@@ -164,18 +253,26 @@ function tool(name, description, parameters, run) {
  * @param {string} name
  * @param {Record<string, unknown>} args
  * @param {() => number} viewRevision
- * @param {() => Record<string, unknown>} apply
+ * @param {() => ToolPayload} apply
  */
-async function write(engine, hostId, name, args, viewRevision, apply) {
+async function write(
+  engine: import('./engine.ts').Engine,
+  hostId: string,
+  name: string,
+  args: Record<string, unknown>,
+  viewRevision: () => number,
+  apply: () => ToolPayload,
+): Promise<ToolPayload> {
   const binding = engine.ensureSession(hostId)
   if (binding.status === 'error') return toolError('UNAVAILABLE', `Binding is ${binding.error_code ?? 'error'}.`)
-  if (typeof args.idempotencyKey !== 'string' || args.idempotencyKey.trim() === '') {
+  const idempotencyKey = args.idempotencyKey
+  if (typeof idempotencyKey !== 'string' || idempotencyKey.trim() === '') {
     return toolError('VALIDATION', 'idempotencyKey is required.')
   }
   const payloadHash = createHash('sha256').update(stable(args)).digest('hex')
-  const result = await engine.store.write(hostId, () => (
-    engine.mutate(hostId, args.idempotencyKey, payloadHash, name, args, apply, viewRevision())
-  ))
+  const result = await engine.store.write(hostId, () =>
+    engine.mutate(hostId, idempotencyKey, payloadHash, name, args, apply, viewRevision()),
+  )
   if (result.ok === true && result.outcome === 'applied') {
     const exported = await engine.exportOne({ id: result.mutationId, session_id: hostId, attempts: 0 })
     const final = {
@@ -183,7 +280,9 @@ async function write(engine, hostId, name, args, viewRevision, apply) {
       export: exported.ok ? 'done' : 'failed',
       ...(exported.ok ? {} : { exportError: exported.error }),
     }
-    engine.store.db.prepare('UPDATE mutations SET result_json = ? WHERE id = ?').run(JSON.stringify(final), result.mutationId)
+    engine.store.db
+      .prepare('UPDATE mutations SET result_json = ? WHERE id = ?')
+      .run(JSON.stringify(final), result.mutationId)
     return final
   }
   return result
@@ -192,7 +291,7 @@ async function write(engine, hostId, name, args, viewRevision, apply) {
 /**
  * @param {Record<string, unknown>} result
  */
-function publish(result) {
+function publish(result: ToolPayload): ToolPayload {
   if (result.ok === false) return result
   return {
     ok: true,
@@ -210,8 +309,13 @@ function publish(result) {
  * @param {string} hostId
  * @param {Record<string, unknown>} args
  */
-function correct(engine, hostId, args) {
-  if ((args.target !== 'fact' && args.target !== 'memory') || typeof args.content !== 'string' || !Number.isInteger(args.id) || !Number.isInteger(args.expectedRevision)) {
+function correct(engine: import('./engine.ts').Engine, hostId: string, args: Record<string, unknown>) {
+  if (
+    (args.target !== 'fact' && args.target !== 'memory') ||
+    typeof args.content !== 'string' ||
+    !Number.isInteger(args.id) ||
+    !Number.isInteger(args.expectedRevision)
+  ) {
     return toolError('VALIDATION', 'correct arguments are incomplete.')
   }
   const table = args.target === 'fact' ? 'facts' : 'memories'
@@ -223,22 +327,30 @@ function correct(engine, hostId, args) {
   const created = nowIso()
   let inserted
   if (args.target === 'fact') {
-    inserted = engine.store.db.prepare(`
+    inserted = engine.store.db
+      .prepare(`
       INSERT INTO facts (
         session_id, kind, content, status, source_type, supersedes, revision, priority, created_at, updated_at
       ) VALUES (?, 'user_fact', ?, 'active', 'explicit_tool', ?, 1, ?, ?, ?)
-    `).run(hostId, args.content, row.id, row.priority, created, created)
-    engine.store.db.prepare(`UPDATE facts SET status = 'superseded', revision = ?, updated_at = ? WHERE id = ?`).run(row.revision + 1, created, row.id)
+    `)
+      .run(hostId, args.content, row.id, row.priority, created, created)
+    engine.store.db
+      .prepare(`UPDATE facts SET status = 'superseded', revision = ?, updated_at = ? WHERE id = ?`)
+      .run(row.revision + 1, created, row.id)
     syncFactFts(engine.store.db, row.id, row.content, false)
     syncFactFts(engine.store.db, Number(inserted.lastInsertRowid), args.content, true)
   } else {
     const title = typeof args.title === 'string' ? args.title : row.title
-    inserted = engine.store.db.prepare(`
+    inserted = engine.store.db
+      .prepare(`
       INSERT INTO memories (
         session_id, title, content, status, source_type, supersedes, revision, created_at, updated_at
       ) VALUES (?, ?, ?, 'active', 'explicit_tool', ?, 1, ?, ?)
-    `).run(hostId, title, args.content, row.id, created, created)
-    engine.store.db.prepare(`UPDATE memories SET status = 'superseded', revision = ?, updated_at = ? WHERE id = ?`).run(row.revision + 1, created, row.id)
+    `)
+      .run(hostId, title, args.content, row.id, created, created)
+    engine.store.db
+      .prepare(`UPDATE memories SET status = 'superseded', revision = ?, updated_at = ? WHERE id = ?`)
+      .run(row.revision + 1, created, row.id)
     syncMemoryFts(engine.store.db, row.id, row.title, row.content, false)
     syncMemoryFts(engine.store.db, Number(inserted.lastInsertRowid), title, args.content, true)
   }
@@ -250,16 +362,23 @@ function correct(engine, hostId, args) {
  * @param {string} hostId
  * @param {Record<string, unknown>} args
  */
-function forget(engine, hostId, args) {
-  if ((args.target !== 'fact' && args.target !== 'memory') || !Number.isInteger(args.id) || !Number.isInteger(args.expectedRevision)) {
+function forget(engine: import('./engine.ts').Engine, hostId: string, args: Record<string, unknown>) {
+  if (
+    (args.target !== 'fact' && args.target !== 'memory') ||
+    !Number.isInteger(args.id) ||
+    !Number.isInteger(args.expectedRevision)
+  ) {
     return toolError('VALIDATION', 'forget arguments are incomplete.')
   }
   const table = args.target === 'fact' ? 'facts' : 'memories'
   const row = engine.store.db.prepare(`SELECT * FROM ${table} WHERE id = ? AND session_id = ?`).get(args.id, hostId)
   if (!row || row.status !== 'active') return toolError('NOT_FOUND', 'No still-active row was found.')
-  if (row.revision !== args.expectedRevision) return toolError('CAS_CONFLICT', 'The revision has changed.', { actualRevision: row.revision })
+  if (row.revision !== args.expectedRevision)
+    return toolError('CAS_CONFLICT', 'The revision has changed.', { actualRevision: row.revision })
   const updated = nowIso()
-  engine.store.db.prepare(`UPDATE ${table} SET status = 'forgotten', revision = ?, updated_at = ? WHERE id = ?`).run(row.revision + 1, updated, row.id)
+  engine.store.db
+    .prepare(`UPDATE ${table} SET status = 'forgotten', revision = ?, updated_at = ? WHERE id = ?`)
+    .run(row.revision + 1, updated, row.id)
   if (args.target === 'fact') syncFactFts(engine.store.db, row.id, row.content, false)
   else syncMemoryFts(engine.store.db, row.id, row.title, row.content, false)
   return ok(0, row.revision + 1, { id: row.id, target: args.target, revision: row.revision + 1, forgotten: true })
@@ -270,8 +389,13 @@ function forget(engine, hostId, args) {
  * @param {string} hostId
  * @param {Record<string, unknown>} args
  */
-function updateState(engine, hostId, args) {
-  if (!Number.isInteger(args.expectedRevision) || args.patch == null || typeof args.patch !== 'object' || Array.isArray(args.patch)) {
+function updateState(engine: import('./engine.ts').Engine, hostId: string, args: Record<string, unknown>) {
+  if (
+    !Number.isInteger(args.expectedRevision) ||
+    args.patch == null ||
+    typeof args.patch !== 'object' ||
+    Array.isArray(args.patch)
+  ) {
     return toolError('VALIDATION', 'state_update arguments are incomplete.')
   }
   const current = engine.statePayload(hostId)
@@ -304,13 +428,17 @@ function updateState(engine, hostId, args) {
   const revision = current.revision + 1
   const updated = nowIso()
   if (current.revision === 0) {
-    engine.store.db.prepare(`
+    engine.store.db
+      .prepare(`
       INSERT INTO working_state (session_id, revision, payload_json, updated_at) VALUES (?, ?, ?, ?)
-    `).run(hostId, revision, JSON.stringify(next), updated)
+    `)
+      .run(hostId, revision, JSON.stringify(next), updated)
   } else {
-    engine.store.db.prepare(`
+    engine.store.db
+      .prepare(`
       UPDATE working_state SET revision = ?, payload_json = ?, updated_at = ? WHERE session_id = ?
-    `).run(revision, JSON.stringify(next), updated, hostId)
+    `)
+      .run(revision, JSON.stringify(next), updated, hostId)
   }
   return ok(0, revision, { revision, payload: next })
 }
@@ -320,19 +448,26 @@ function updateState(engine, hostId, args) {
  * @param {number} storeRevision
  * @param {unknown} data
  */
-function ok(viewRevision, storeRevision, data) {
+function ok(viewRevision: number, storeRevision: number, data: unknown) {
   return { ok: true, viewRevision, storeRevision, data }
 }
 
 /**
  * @param {unknown} value
  */
-function stable(value) {
+function stable(value: unknown): string {
   if (Array.isArray(value)) return `[${value.map(item => stable(item)).join(',')}]`
-  if (value && typeof value === 'object') {
-    return `{${Object.keys(value).sort().map(key => `${JSON.stringify(key)}:${stable(value[key])}`).join(',')}}`
+  if (isRecord(value)) {
+    return `{${Object.keys(value)
+      .sort()
+      .map(key => `${JSON.stringify(key)}:${stable(value[key])}`)
+      .join(',')}}`
   }
   return JSON.stringify(value)
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value != null && typeof value === 'object' && !Array.isArray(value)
 }
 
 function nowIso() {
@@ -343,7 +478,7 @@ function nowIso() {
  * @param {import('./engine.js').Engine} engine
  * @param {string} sessionId
  */
-function currentRevision(engine, sessionId) {
+function currentRevision(engine: import('./engine.ts').Engine, sessionId: string) {
   return engine.currentView(sessionId)?.revision ?? engine.binding(sessionId)?.last_view_revision ?? 0
 }
 

@@ -22,7 +22,13 @@ test('choosing a bot replaces the query with its name and session id', () => {
 })
 
 test('the menu filters by the visible name', () => {
-  assert.deepEqual(filterMentions(bots, 'ern').map(item => item.label), ['Ernie'])
-  assert.deepEqual(filterMentions(bots, 'gree').map(item => item.sessionId), ['session-hi'])
+  assert.deepEqual(
+    filterMentions(bots, 'ern').map(item => item.label),
+    ['Ernie'],
+  )
+  assert.deepEqual(
+    filterMentions(bots, 'gree').map(item => item.sessionId),
+    ['session-hi'],
+  )
   assert.equal(filterMentions(bots, '').length, 2)
 })

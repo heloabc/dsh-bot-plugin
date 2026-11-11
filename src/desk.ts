@@ -6,6 +6,20 @@ import { openLedger, validIdempotencyKey } from './desk-ledger.ts'
 import { openSessionPreviews } from './session-previews.ts'
 import { purgeSessionFiles, sessionDirectory, writeBotMarker } from './session-files.ts'
 
+export interface RpcEnvelope {
+  result?: { ok?: boolean; value?: any; error?: { message?: string; code?: string } }
+}
+
+/** The request fields the desk actually reads. Node's IncomingMessage satisfies this. */
+export type DeskRequest = {
+  headers: import('node:http').IncomingHttpHeaders | Record<string, string | string[] | undefined>
+  on(event: string, listener: (...args: any[]) => void): unknown
+  destroy(error?: Error): void
+  socket?: { remoteAddress?: string; localPort?: number; localAddress?: string }
+  method?: string
+  url?: string
+}
+
 const API = '/session-foundations/api'
 const PREVIEW_SESSION = /^(?:session|worker)-[A-Za-z0-9-]+$/
 const SECRET_KEY = /token|secret|password|authorization|api[-_]?key|cookie/i
@@ -19,14 +33,28 @@ const SECRET_KEY = /token|secret|password|authorization|api[-_]?key|cookie/i
  * @param {(sessionId: string) => { kind?: string } | null | undefined} options.mark
  * @param {(sessionId: string) => void | Promise<void>} options.hold
  * @param {(sessionId: string) => void | Promise<void>} options.release
- * @param {(endpoint: string, args: Record<string, unknown>, req: import('node:http').IncomingMessage) => Promise<{ status: number, body: RpcEnvelope }>} options.rpc
- * @param {(req: import('node:http').IncomingMessage) => Promise<Record<string, unknown>>} options.usage
+ * @param {(endpoint: string, args: Record<string, unknown>, req: DeskRequest) => Promise<{ status: number, body: RpcEnvelope }>} options.rpc
+ * @param {(req: DeskRequest) => Promise<Record<string, unknown>>} options.usage
  */
-export function createDesk(options) {
+export function createDesk(options: {
+  ledgerFile: string
+  profileDir: string
+  sessionCwd: string
+  isBot: (sessionId: string) => boolean
+  mark: (sessionId: string) => { kind?: string } | null | undefined
+  hold: (sessionId: string) => void | Promise<void>
+  release: (sessionId: string) => void | Promise<void>
+  rpc: (
+    endpoint: string,
+    args: Record<string, unknown>,
+    req: DeskRequest,
+  ) => Promise<{ status: number; body: RpcEnvelope }>
+  usage: (req: DeskRequest) => Promise<Record<string, unknown>>
+}) {
   const ledger = openLedger(options.ledgerFile)
   const sessionPreviews = openSessionPreviews(join(dirname(options.ledgerFile), 'session-previews.json'))
   /** @type {Map<string, Promise<void>>} */
-  const promptLocks = new Map()
+  const promptLocks: Map<string, Promise<void>> = new Map()
   const sessionsRoot = join(options.profileDir, 'sessions')
 
   return {
@@ -34,10 +62,14 @@ export function createDesk(options) {
      * @param {string} method
      * @param {string} path
      */
-    owns(method, path) {
+    owns(method: string, path: string) {
       const sub = subpath(path)
       if (sub === null) return false
-      if (method === 'GET' && (sub === '/health' || sub === '/sessions' || sub === '/tasks' || sub === '/usage' || sub === '/file')) return true
+      if (
+        method === 'GET' &&
+        (sub === '/health' || sub === '/sessions' || sub === '/tasks' || sub === '/usage' || sub === '/file')
+      )
+        return true
       if (method === 'POST' && (sub === '/sessions' || sub === '/sessions/previews' || sub === '/tasks')) return true
       if (method === 'POST' && /^\/sessions\/session-[A-Za-z0-9-]+\/(?:archive|purge)$/.test(sub)) return true
       if (method === 'POST' && /^\/tasks\/[0-9a-f-]{36}\/cancel$/.test(sub)) return true
@@ -47,9 +79,9 @@ export function createDesk(options) {
      * @param {string} method
      * @param {string} path
      * @param {URL} url
-     * @param {import('node:http').IncomingMessage} req
+     * @param {DeskRequest} req
      */
-    async handle(method, path, url, req) {
+    async handle(method: string, path: string, url: URL, req: DeskRequest) {
       const sub = subpath(path) ?? ''
       const body = method === 'POST' ? await readJson(req) : {}
       if (method === 'GET' && sub === '/health') return { status: 200, body: await health(req) }
@@ -74,9 +106,9 @@ export function createDesk(options) {
   }
 
   /**
-   * @param {import('node:http').IncomingMessage} req
+   * @param {DeskRequest} req
    */
-  async function health(req) {
+  async function health(req: DeskRequest) {
     const execution = await executionState(req)
     return {
       primary: { reachable: execution.reachable },
@@ -85,9 +117,9 @@ export function createDesk(options) {
   }
 
   /**
-   * @param {import('node:http').IncomingMessage} req
+   * @param {DeskRequest} req
    */
-  async function executionState(req) {
+  async function executionState(req: DeskRequest) {
     const catalog = await options.rpc('session/modelCatalog', {}, req)
     const value = catalog.body?.result?.value
     const routable = Array.isArray(value?.routableProviders) ? value.routableProviders : []
@@ -95,32 +127,41 @@ export function createDesk(options) {
     const failure = catalog.body?.result?.error?.message
     return {
       ready: false,
-      reason: catalog.body?.result?.ok === true ? 'no_provider' : (failure ? String(failure) : 'catalog_unreadable'),
+      reason: catalog.body?.result?.ok === true ? 'no_provider' : failure ? String(failure) : 'catalog_unreadable',
       reachable: catalog.status > 0 && catalog.status < 500,
     }
   }
 
   /**
-   * @param {import('node:http').IncomingMessage} req
+   * @param {DeskRequest} req
    * @param {Record<string, unknown>} body
    */
-  async function createSession(req, body) {
+  async function createSession(req: DeskRequest, body: Record<string, unknown>) {
     const key = idempotencyOf(req, body)
     if (!validIdempotencyKey(key)) return { status: 400, body: { error: 'idempotency_key_required' } }
     const existing = ledger.session(key)
     if (existing) return { status: 200, body: { sessionId: existing.sessionId, reused: true } }
     const listed = await options.rpc('session/list', { _request: {} }, req)
-    const known = listed.body?.result?.ok === true && Array.isArray(listed.body.result.value?.items)
-      ? listed.body.result.value.items
-      : []
-    const reusable = options.sessionCwd === ''
-      ? undefined
-      : known.find(item => item?.blank === true && item?.running !== true && item?.cwd === options.sessionCwd && typeof item.sessionId === 'string')
-    const request = options.sessionCwd === ''
-      ? {}
-      : reusable
-        ? { cwd: options.sessionCwd, sessionId: reusable.sessionId }
-        : { cwd: options.sessionCwd }
+    const known =
+      listed.body?.result?.ok === true && Array.isArray(listed.body.result.value?.items)
+        ? listed.body.result.value.items
+        : []
+    const reusable =
+      options.sessionCwd === ''
+        ? undefined
+        : known.find(
+            (item: any) =>
+              item?.blank === true &&
+              item?.running !== true &&
+              item?.cwd === options.sessionCwd &&
+              typeof item.sessionId === 'string',
+          )
+    const request =
+      options.sessionCwd === ''
+        ? {}
+        : reusable
+          ? { cwd: options.sessionCwd, sessionId: reusable.sessionId }
+          : { cwd: options.sessionCwd }
     const created = await options.rpc('session/create', { request }, req)
     const sessionId = created.body?.result?.value?.sessionId
     if (created.body?.result?.ok !== true || typeof sessionId !== 'string') {
@@ -144,14 +185,17 @@ export function createDesk(options) {
       }
     }
     ledger.rememberSession(key, sessionId)
-    return { status: 201, body: { sessionId, kind: 'bot', marker, reused: Boolean(reusable) && sessionId === reusable.sessionId } }
+    return {
+      status: 201,
+      body: { sessionId, kind: 'bot', marker, reused: Boolean(reusable) && sessionId === reusable.sessionId },
+    }
   }
 
   /**
-   * @param {import('node:http').IncomingMessage} req
+   * @param {DeskRequest} req
    * @param {string} sessionId
    */
-  async function archiveBlank(req, sessionId) {
+  async function archiveBlank(req: DeskRequest, sessionId: string) {
     const listed = await options.rpc('session/list', { _request: {} }, req)
     const items = listed.body?.result?.value?.items
     if (listed.body?.result?.ok !== true || !Array.isArray(items)) {
@@ -169,10 +213,10 @@ export function createDesk(options) {
   }
 
   /**
-   * @param {import('node:http').IncomingMessage} req
+   * @param {DeskRequest} req
    * @param {string} sessionId
    */
-  async function purgeBlank(req, sessionId) {
+  async function purgeBlank(req: DeskRequest, sessionId: string) {
     const listed = await options.rpc('session/list', { _request: {} }, req)
     const items = listed.body?.result?.value?.items
     if (listed.body?.result?.ok !== true || !Array.isArray(items)) {
@@ -192,7 +236,10 @@ export function createDesk(options) {
         cwd: item.cwd,
       })
     } catch (error) {
-      return { status: 500, body: { error: 'purge_failed', message: error instanceof Error ? error.message : 'purge failed' } }
+      return {
+        status: 500,
+        body: { error: 'purge_failed', message: error instanceof Error ? error.message : 'purge failed' },
+      }
     }
     sessionPreviews.forget(sessionId)
     return { status: 200, body: { sessionId, purged: true } }
@@ -201,7 +248,7 @@ export function createDesk(options) {
   /**
    * @param {unknown} body
    */
-  function attachPreviews(body) {
+  function attachPreviews(body: unknown) {
     if (!body || typeof body !== 'object' || Array.isArray(body)) return body
     return { ...body, previews: sessionPreviews.all() }
   }
@@ -209,7 +256,7 @@ export function createDesk(options) {
   /**
    * @param {Record<string, unknown>} body
    */
-  function savePreviews(body) {
+  function savePreviews(body: Record<string, unknown>) {
     if (body.previews && typeof body.previews === 'object' && !Array.isArray(body.previews)) {
       sessionPreviews.rememberAll(body.previews)
       return { status: 200, body: { ok: true, previews: sessionPreviews.all() } }
@@ -220,10 +267,10 @@ export function createDesk(options) {
   }
 
   /**
-   * @param {import('node:http').IncomingMessage} req
+   * @param {DeskRequest} req
    * @param {Record<string, unknown>} body
    */
-  async function createTask(req, body) {
+  async function createTask(req: DeskRequest, body: Record<string, unknown>) {
     const key = idempotencyOf(req, body)
     if (!validIdempotencyKey(key)) return { status: 400, body: { error: 'idempotency_key_required' } }
     const text = typeof body.text === 'string' ? body.text : ''
@@ -239,7 +286,14 @@ export function createDesk(options) {
     })
     if (!remembered.created) return { status: 200, body: { task: remembered.record, reused: true } }
     if (!execution.ready) {
-      return { status: 409, body: { error: 'model_unconfigured', task: remembered.record, execution: { ready: false, reason: execution.reason } } }
+      return {
+        status: 409,
+        body: {
+          error: 'model_unconfigured',
+          task: remembered.record,
+          execution: { ready: false, reason: execution.reason },
+        },
+      }
     }
     const delivered = await withPromptLock(sessionId, () => deliverPrompt(req, sessionId, text, remembered.record.id))
     if (!delivered.ok) {
@@ -248,16 +302,20 @@ export function createDesk(options) {
         reason: delivered.reason,
         upstreamCode: delivered.upstreamCode,
       })
-      return { status: delivered.status, body: { error: delivered.error, task: updated } }
+      const failStatus = delivered.status
+      return {
+        status: typeof failStatus === 'number' ? failStatus : 502,
+        body: { error: delivered.error, task: updated },
+      }
     }
     return { status: 202, body: { task: remembered.record, reused: false, interrupted: delivered.interrupted } }
   }
 
   /**
-   * @param {import('node:http').IncomingMessage} req
+   * @param {DeskRequest} req
    * @param {string} id
    */
-  async function cancelTask(req, id) {
+  async function cancelTask(req: DeskRequest, id: string) {
     const task = ledger.task(id)
     if (!task) return { status: 404, body: { error: 'not_found' } }
     if (task.status !== 'accepted') return { status: 409, body: { error: 'not_running', task } }
@@ -271,18 +329,22 @@ export function createDesk(options) {
   }
 
   /**
-   * @param {import('node:http').IncomingMessage} req
+   * @param {DeskRequest} req
    * @param {URL} url
    */
-  async function filePreview(req, url) {
+  async function filePreview(req: DeskRequest, url: URL) {
     const sessionId = url.searchParams.get('sessionId') ?? ''
     const filePath = workspaceRelativePath(url.searchParams.get('path') ?? '')
     if (!PREVIEW_SESSION.test(sessionId) || filePath === null) return { status: 400, body: { error: 'invalid_file' } }
-    const result = await options.rpc('workspaceFiles/read', {
-      workspaceFileScopeId: sessionId,
-      path: filePath,
-      range: { offset: 1, limit: 2000 },
-    }, req)
+    const result = await options.rpc(
+      'workspaceFiles/read',
+      {
+        workspaceFileScopeId: sessionId,
+        path: filePath,
+        range: { offset: 1, limit: 2000 },
+      },
+      req,
+    )
     const value = result.body?.result?.value
     if (result.body?.result?.ok !== true || !value || typeof value.text !== 'string') {
       const code = result.body?.result?.error?.code
@@ -308,10 +370,10 @@ export function createDesk(options) {
    * @param {() => Promise<T>} fn
    * @template T
    */
-  async function withPromptLock(sessionId, fn) {
+  async function withPromptLock<T>(sessionId: string, fn: () => Promise<T>) {
     const previous = promptLocks.get(sessionId) ?? Promise.resolve()
     let release = () => {}
-    const gate = new Promise(resolve => {
+    const gate = new Promise<void>(resolve => {
       release = () => resolve(undefined)
     })
     const tail = previous.then(() => gate)
@@ -328,7 +390,7 @@ export function createDesk(options) {
   /**
    * @param {string} sessionId
    */
-  function botMarked(sessionId) {
+  function botMarked(sessionId: string) {
     if (options.sessionCwd === '') return false
     try {
       const file = join(sessionDirectory(sessionsRoot, options.sessionCwd, sessionId), 'bot.json')
@@ -340,29 +402,35 @@ export function createDesk(options) {
   }
 
   /**
-   * @param {import('node:http').IncomingMessage} req
+   * @param {DeskRequest} req
    * @param {string} sessionId
    * @returns {Promise<boolean | null>}
    */
-  async function sessionRunning(req, sessionId) {
+  async function sessionRunning(req: DeskRequest, sessionId: string): Promise<boolean | null> {
     const listed = await options.rpc('session/list', { _request: {} }, req)
     if (listed.body?.result?.ok !== true || !Array.isArray(listed.body.result.value?.items)) return null
-    const item = listed.body.result.value.items.find(entry => entry?.sessionId === sessionId)
+    const item = listed.body.result.value.items.find((entry: any) => entry?.sessionId === sessionId)
     return item?.running === true
   }
 
   /**
    * Idle sessions queue. A live bot turn is cancelled, then the new text is a new turn.
    * The cancel is only the main session. Worker sessions are not addressed here.
-   * @param {import('node:http').IncomingMessage} req
+   * @param {DeskRequest} req
    * @param {string} sessionId
    * @param {string} text
    * @param {string} requestId
    */
-  async function deliverPrompt(req, sessionId, text, requestId) {
+  async function deliverPrompt(req: DeskRequest, sessionId: string, text: string, requestId: string) {
     const running = await sessionRunning(req, sessionId)
     if (running === null) {
-      return { ok: false, status: 502, error: 'session_unreadable', reason: 'Could not tell whether the session is still running.', upstreamCode: '' }
+      return {
+        ok: false,
+        status: 502,
+        error: 'session_unreadable',
+        reason: 'Could not tell whether the session is still running.',
+        upstreamCode: '',
+      }
     }
     let interrupted = false
     if (running && (options.isBot(sessionId) || botMarked(sessionId))) {
@@ -385,9 +453,13 @@ export function createDesk(options) {
         }
       }
     }
-    const prompted = await options.rpc('session/prompt', {
-      request: { requestId, sessionId, mode: 'queue', content: [{ type: 'text', text }] },
-    }, req)
+    const prompted = await options.rpc(
+      'session/prompt',
+      {
+        request: { requestId, sessionId, mode: 'queue', content: [{ type: 'text', text }] },
+      },
+      req,
+    )
     if (prompted.body?.result?.ok !== true) {
       if (interrupted) await options.release(sessionId)
       return {
@@ -405,17 +477,17 @@ export function createDesk(options) {
 /**
  * @param {string} path
  */
-function subpath(path) {
+function subpath(path: string) {
   if (path === API) return '/'
   if (!path.startsWith(`${API}/`)) return null
   return path.slice(API.length)
 }
 
 /**
- * @param {import('node:http').IncomingMessage} req
+ * @param {DeskRequest} req
  * @param {Record<string, unknown>} body
  */
-function idempotencyOf(req, body) {
+function idempotencyOf(req: DeskRequest, body: Record<string, unknown>) {
   const value = req.headers['idempotency-key']
   const header = typeof value === 'string' ? value : ''
   if (header !== '') return header
@@ -427,7 +499,7 @@ function idempotencyOf(req, body) {
  * @param {string} value
  * @returns {string | null}
  */
-function workspaceRelativePath(value) {
+function workspaceRelativePath(value: string): string | null {
   if (value.length === 0 || value.length > 512 || /[\u0000-\u001f\\?#]/.test(value)) return null
   if (value.startsWith('/') || /^[a-zA-Z]:/.test(value)) return null
   const parts = []
@@ -443,11 +515,11 @@ function workspaceRelativePath(value) {
  * @param {unknown} value
  * @returns {any}
  */
-function redactSecrets(value) {
+function redactSecrets(value: unknown): any {
   if (Array.isArray(value)) return value.map(redactSecrets)
   if (value !== null && typeof value === 'object') {
     /** @type {Record<string, unknown>} */
-    const out = {}
+    const out: Record<string, unknown> = {}
     for (const [key, inner] of Object.entries(value)) {
       if (SECRET_KEY.test(key)) continue
       out[key] = redactSecrets(inner)
@@ -458,14 +530,14 @@ function redactSecrets(value) {
 }
 
 /**
- * @param {import('node:http').IncomingMessage} req
+ * @param {DeskRequest} req
  * @returns {Promise<Record<string, unknown>>}
  */
-function readJson(req) {
+function readJson(req: DeskRequest): Promise<Record<string, unknown>> {
   return new Promise((resolve, reject) => {
-    const chunks = []
+    const chunks: any[] = []
     let size = 0
-    req.on('data', (chunk) => {
+    req.on('data', (chunk: any) => {
       size += chunk.length
       if (size > 32_768) {
         reject(Object.assign(new Error('body too large'), { code: 'VALIDATION' }))

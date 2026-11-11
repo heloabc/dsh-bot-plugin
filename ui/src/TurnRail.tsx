@@ -2,7 +2,11 @@ import { useEffect, useRef, useState, type RefObject } from 'react'
 import { useI18n } from './locale'
 import type { RailMark } from './turn-marks'
 
-export function TurnRail({ root, marks, busyId }: {
+export function TurnRail({
+  root,
+  marks,
+  busyId,
+}: {
   root: RefObject<HTMLElement | null>
   marks: readonly RailMark[]
   busyId?: string
@@ -28,7 +32,7 @@ export function TurnRail({ root, marks, busyId }: {
           if (el.getBoundingClientRect().top - top <= 36) current = mark.id
         }
       }
-      setActive(value => value === current ? value : current)
+      setActive(value => (value === current ? value : current))
     }
     update()
     node.addEventListener('scroll', update, { passive: true })
@@ -43,7 +47,7 @@ export function TurnRail({ root, marks, busyId }: {
     rail.scrollTop = Math.max(0, next)
     const top = rail.scrollTop > 1
     const bottom = rail.scrollTop < rail.scrollHeight - rail.clientHeight - 1
-    setFade(value => value.top === top && value.bottom === bottom ? value : { top, bottom })
+    setFade(value => (value.top === top && value.bottom === bottom ? value : { top, bottom }))
   }, [active, markKey])
 
   const { t } = useI18n()
@@ -62,12 +66,19 @@ export function TurnRail({ root, marks, busyId }: {
           <button
             key={mark.id}
             type="button"
-            className={['turn-mark', current ? 'active' : '', mark.id === hover ? 'preview' : '', mark.id === busyId ? 'busy' : ''].filter(Boolean).join(' ')}
+            className={[
+              'turn-mark',
+              current ? 'active' : '',
+              mark.id === hover ? 'preview' : '',
+              mark.id === busyId ? 'busy' : '',
+            ]
+              .filter(Boolean)
+              .join(' ')}
             aria-current={current ? 'true' : undefined}
             aria-label={t('turn.jump', { index: String(index + 1) })}
             onMouseEnter={() => setHover(mark.id)}
             onFocus={() => setHover(mark.id)}
-            onBlur={() => setHover(value => value === mark.id ? null : value)}
+            onBlur={() => setHover(value => (value === mark.id ? null : value))}
             onClick={() => {
               const el = root.current?.querySelector(`[data-turn="${CSS.escape(mark.id)}"]`)
               el?.scrollIntoView({ block: 'start', behavior: motion ? 'auto' : 'smooth' })

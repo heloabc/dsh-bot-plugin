@@ -12,7 +12,7 @@ import { createWorkRuntime } from './work-worker.ts'
  * Admin-command usage. `program` is the command the operator typed, usually `dsh-bot`.
  * @param {string} [program]
  */
-export function usage(program = 'dsh-bot') {
+export function usage(program: string = 'dsh-bot') {
   return `usage:
   ${program} persona confirm --data-dir DIR --file SOUL.md [--session ID]
   ${program} persona show --data-dir DIR
@@ -50,7 +50,7 @@ export async function run(argv: string[], options: { program?: string } = {}) {
   const flags = flagsOf(action ? argv.slice(2) : argv.slice(1))
 
   /** @type {import('./store.js').Store | null} */
-  let triggerStore = null
+  let triggerStore: import('./store.ts').Store | null = null
 
   /**
    * Operator entry. `--session` is the session the operator is managing.
@@ -59,7 +59,7 @@ export async function run(argv: string[], options: { program?: string } = {}) {
    * @param {string} name
    * @param {Record<string, unknown>} args
    */
-  async function runTool(engine, name, args) {
+  async function runTool(engine: import('./engine.ts').Engine, name: string, args: Record<string, unknown>) {
     const sessionId = required(flags, 'session')
     const tools = Object.fromEntries(toolDefinitions(engine, () => 0).map(item => [item.name, item]))
     const result = await tools[name].execute(args, { agent: { id: sessionId }, signal: AbortSignal.timeout(10000) })
@@ -108,7 +108,10 @@ export async function run(argv: string[], options: { program?: string } = {}) {
       engine.store.close()
     } else if (command === 'session' && action === 'bind') {
       const engine = openEngine()
-      const binding = engine.bindPersona(required(flags, 'session'), flags.persona ? Number(flags.persona) : engine.latestPersona()?.id ?? null)
+      const binding = engine.bindPersona(
+        required(flags, 'session'),
+        flags.persona ? Number(flags.persona) : (engine.latestPersona()?.id ?? null),
+      )
       console.log(JSON.stringify({ ok: true, binding }, null, 2))
       engine.store.close()
     } else if (command === 'memory' && action === 'remember') {
@@ -142,15 +145,29 @@ export async function run(argv: string[], options: { program?: string } = {}) {
       const engine = openEngine()
       const sessionId = required(flags, 'session')
       engine.ensureSession(sessionId)
-      console.log(JSON.stringify({
-        facts: engine.store.db.prepare('SELECT id, status, revision, priority, content FROM facts WHERE session_id = ? ORDER BY id').all(sessionId),
-        memories: engine.store.db.prepare('SELECT id, status, revision, title, content FROM memories WHERE session_id = ? ORDER BY id').all(sessionId),
-        state: engine.statePayload(sessionId),
-      }, null, 2))
+      console.log(
+        JSON.stringify(
+          {
+            facts: engine.store.db
+              .prepare('SELECT id, status, revision, priority, content FROM facts WHERE session_id = ? ORDER BY id')
+              .all(sessionId),
+            memories: engine.store.db
+              .prepare('SELECT id, status, revision, title, content FROM memories WHERE session_id = ? ORDER BY id')
+              .all(sessionId),
+            state: engine.statePayload(sessionId),
+          },
+          null,
+          2,
+        ),
+      )
       engine.store.close()
     } else if (command === 'skill' && action === 'register') {
       const engine = openEngine()
-      const row = engine.registerSkillFromDisk(required(flags, 'session'), flags.scope === 'private' ? 'private' : 'public', required(flags, 'id'))
+      const row = engine.registerSkillFromDisk(
+        required(flags, 'session'),
+        flags.scope === 'private' ? 'private' : 'public',
+        required(flags, 'id'),
+      )
       console.log(JSON.stringify({ ok: true, skill: row }, null, 2))
       engine.store.close()
     } else if (command === 'skill' && (action === 'enable' || action === 'disable' || action === 'revoke')) {
@@ -163,7 +180,9 @@ export async function run(argv: string[], options: { program?: string } = {}) {
       engine.store.close()
     } else if (command === 'skill' && action === 'list') {
       const engine = openEngine()
-      const rows = engine.store.db.prepare('SELECT * FROM skill_bindings WHERE session_id = ? ORDER BY skill_id').all(required(flags, 'session'))
+      const rows = engine.store.db
+        .prepare('SELECT * FROM skill_bindings WHERE session_id = ? ORDER BY skill_id')
+        .all(required(flags, 'session'))
       console.log(JSON.stringify({ ok: true, skills: rows }, null, 2))
       engine.store.close()
     } else if (command === 'message' && action === 'allow') {
@@ -176,17 +195,40 @@ export async function run(argv: string[], options: { program?: string } = {}) {
       triggersClose()
     } else if (command === 'message' && action === 'list') {
       const triggers = openTriggers()
-      console.log(JSON.stringify({ ok: true, acl: triggers.listAcl(), deliveries: triggers.listDeliveries(flags.session ?? '', flags.correlation ?? '') }, null, 2))
+      console.log(
+        JSON.stringify(
+          {
+            ok: true,
+            acl: triggers.listAcl(),
+            deliveries: triggers.listDeliveries(flags.session ?? '', flags.correlation ?? ''),
+          },
+          null,
+          2,
+        ),
+      )
       triggersClose()
     } else if (command === 'work' && action === 'dispatch') {
       const engine = openEngine()
       const sessionId = required(flags, 'session')
       if (!engine.isBot(sessionId)) {
-        console.log(JSON.stringify({ ok: false, code: 'FORBIDDEN', message: 'An ordinary session stays on one loop and cannot dispatch work.' }, null, 2))
+        console.log(
+          JSON.stringify(
+            {
+              ok: false,
+              code: 'FORBIDDEN',
+              message: 'An ordinary session stays on one loop and cannot dispatch work.',
+            },
+            null,
+            2,
+          ),
+        )
         engine.store.close()
         process.exitCode = 1
       } else {
-        const work = createWorkRuntime(engine.store, engine, { resident: false, push: async () => ({ ok: false, ambiguous: true }) })
+        const work = createWorkRuntime(engine.store, engine, {
+          resident: false,
+          push: async () => ({ ok: false, ambiguous: true }),
+        })
         const result = await work.dispatch(sessionId, {
           briefing: required(flags, 'text'),
           idempotencyKey: flags.key,
@@ -202,16 +244,27 @@ export async function run(argv: string[], options: { program?: string } = {}) {
         text: required(flags, 'text'),
         idempotencyKey: required(flags, 'key'),
       })
-      console.log(JSON.stringify({
-        ...result,
-        ...('status' in result && result.status === 'intent' ? {
-          queued: false,
-          note: 'Only the intent was written. A resident DSH host reconciles it and then followup reaches the native inbox. This process will not execute after it exits.',
-        } : {}),
-      }, null, 2))
+      console.log(
+        JSON.stringify(
+          {
+            ...result,
+            ...('status' in result && result.status === 'intent'
+              ? {
+                  queued: false,
+                  note: 'Only the intent was written. A resident DSH host reconciles it and then followup reaches the native inbox. This process will not execute after it exits.',
+                }
+              : {}),
+          },
+          null,
+          2,
+        ),
+      )
       triggersClose()
       if (!result.ok) process.exitCode = 1
-    } else if (command === 'timer' && (action === 'add' || action === 'list' || action === 'pause' || action === 'resume' || action === 'delete')) {
+    } else if (
+      command === 'timer' &&
+      (action === 'add' || action === 'list' || action === 'pause' || action === 'resume' || action === 'delete')
+    ) {
       const triggers = openTriggers()
       if (action === 'add') {
         const result = triggers.addSchedule({
@@ -222,14 +275,22 @@ export async function run(argv: string[], options: { program?: string } = {}) {
           timezone: flags.timezone,
           note: flags.note ?? '',
         })
-        console.log(JSON.stringify({
-          ...result,
-          note: 'The definition is in SQLite. Only a resident host tick performs the followup. The CLI does not deliver it.',
-        }, null, 2))
+        console.log(
+          JSON.stringify(
+            {
+              ...result,
+              note: 'The definition is in SQLite. Only a resident host tick performs the followup. The CLI does not deliver it.',
+            },
+            null,
+            2,
+          ),
+        )
         if (!result.ok) process.exitCode = 1
       } else if (action === 'list') console.log(JSON.stringify({ ok: true, timers: triggers.listSchedules() }, null, 2))
-      else if (action === 'pause') console.log(JSON.stringify(triggers.setScheduleEnabled(required(flags, 'id'), false), null, 2))
-      else if (action === 'resume') console.log(JSON.stringify(triggers.setScheduleEnabled(required(flags, 'id'), true), null, 2))
+      else if (action === 'pause')
+        console.log(JSON.stringify(triggers.setScheduleEnabled(required(flags, 'id'), false), null, 2))
+      else if (action === 'resume')
+        console.log(JSON.stringify(triggers.setScheduleEnabled(required(flags, 'id'), true), null, 2))
       else console.log(JSON.stringify(triggers.deleteSchedule(required(flags, 'id')), null, 2))
       triggersClose()
     } else if (command === 'webhook' && (action === 'register' || action === 'revoke' || action === 'list')) {
@@ -238,21 +299,28 @@ export async function run(argv: string[], options: { program?: string } = {}) {
         const result = triggers.registerWebhook(required(flags, 'session'))
         console.log(JSON.stringify(result.ok ? { ok: true, hook: result.hook } : result, null, 2))
         if (!result.ok) process.exitCode = 1
-      } else if (action === 'revoke') console.log(JSON.stringify(triggers.revokeWebhook(required(flags, 'id')), null, 2))
+      } else if (action === 'revoke')
+        console.log(JSON.stringify(triggers.revokeWebhook(required(flags, 'id')), null, 2))
       else console.log(JSON.stringify({ ok: true, webhooks: triggers.listWebhooks() }, null, 2))
       triggersClose()
     } else if (command === 'status') {
       const engine = openEngine()
       const sessionId = flags.session ?? ''
       const binding = sessionId ? engine.binding(sessionId) : null
-      console.log(JSON.stringify({
-        ok: true,
-        dataDir: dataDir(),
-        persona: engine.latestPersona(),
-        binding,
-        view: binding ? engine.currentView(sessionId) : null,
-        sandbox: false,
-      }, null, 2))
+      console.log(
+        JSON.stringify(
+          {
+            ok: true,
+            dataDir: dataDir(),
+            persona: engine.latestPersona(),
+            binding,
+            view: binding ? engine.currentView(sessionId) : null,
+            sandbox: false,
+          },
+          null,
+          2,
+        ),
+      )
       engine.store.close()
     } else if (command === 'backup') {
       const engine = openEngine()
@@ -280,7 +348,7 @@ export async function run(argv: string[], options: { program?: string } = {}) {
  * @param {Record<string, string>} bag
  * @param {string} name
  */
-function required(bag, name) {
+function required(bag: Record<string, string>, name: string) {
   const value = bag[name]
   if (!value) throw new Error(`missing --${name}`)
   return value
@@ -308,7 +376,7 @@ function flagsOf(argv: string[]) {
 /**
  * @param {string} root
  */
-function readOwner(root) {
+function readOwner(root: string) {
   try {
     const owner = JSON.parse(readFileSync(join(root, 'owner.json'), 'utf8'))
     return pidAlive(owner.pid) ? owner.pid : null

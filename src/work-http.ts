@@ -1,13 +1,33 @@
 import { toolError } from './errors.ts'
 import { diffValue } from './live-diff.ts'
 
+type LiveRequest = {
+  socket?: { setTimeout(msecs: number, callback?: () => void): unknown } | null
+  on(event: string, listener: (...args: any[]) => void): unknown
+}
+
+type LiveResponse = {
+  socket?: { setTimeout(msecs: number, callback?: () => void): unknown } | null
+  readonly writableEnded: boolean
+  status?: number
+  headers?: Record<string, unknown> | null
+  writeHead(statusCode: number, headers?: Record<string, string>): unknown
+  write(chunk: string): unknown
+  end(chunk?: unknown): unknown
+  on(event: string, listener: (...args: any[]) => void): unknown
+}
+
 /**
  * One server-sent frame. An unchanged stamp sends nothing.
  * @param {{ liveStamp: () => string, liveBoard: (sessionId: string) => unknown }} work
  * @param {string} sessionId
  * @param {string | null} previousStamp
  */
-export function nextLiveFrame(work, sessionId, previousStamp) {
+export function nextLiveFrame(
+  work: { liveStamp: () => string; liveBoard: (sessionId: string) => unknown },
+  sessionId: string,
+  previousStamp: string | null,
+) {
   const stamp = work.liveStamp()
   if (previousStamp !== null && stamp === previousStamp) return { stamp, frame: '' }
   const body = work.liveBoard(sessionId)
@@ -22,7 +42,12 @@ export function nextLiveFrame(work, sessionId, previousStamp) {
  * @param {string} sessionId
  * @param {{ liveStamp: () => string, liveBoard: (sessionId: string) => unknown }} work
  */
-export function openWorkLive(req, res, sessionId, work) {
+export function openWorkLive(
+  req: LiveRequest,
+  res: LiveResponse,
+  sessionId: string,
+  work: { liveStamp: () => string; liveBoard: (sessionId: string) => unknown },
+) {
   res.writeHead(200, {
     'content-type': 'text/event-stream; charset=utf-8',
     'cache-control': 'no-store',
@@ -33,10 +58,10 @@ export function openWorkLive(req, res, sessionId, work) {
   res.write(`:${' '.repeat(2048)}\n\n`)
   let stopped = false
   /** @type {string | null} */
-  let stamp = null
+  let stamp: string | null = null
   let quiet = 0
   /** @type {ReturnType<typeof setInterval> | null} */
-  let timer = null
+  let timer: ReturnType<typeof setInterval> | null = null
   const stop = () => {
     if (stopped) return
     stopped = true
@@ -78,7 +103,7 @@ export function openWorkLive(req, res, sessionId, work) {
  * @param {unknown} previous
  * @param {unknown} value
  */
-function frameFor(name, previous, value) {
+function frameFor(name: 'desk' | 'work', previous: unknown, value: unknown) {
   if (previous === undefined) {
     return {
       stored: cloneJson(value),
@@ -96,7 +121,7 @@ function frameFor(name, previous, value) {
 /**
  * @param {unknown} value
  */
-function cloneJson(value) {
+function cloneJson(value: unknown) {
   return JSON.parse(JSON.stringify(value))
 }
 
@@ -116,7 +141,17 @@ function cloneJson(value) {
  *   intervalMs?: number,
  * }} source
  */
-export function openPageLive(req, res, source) {
+export function openPageLive(
+  req: LiveRequest,
+  res: LiveResponse,
+  source: {
+    workStamp: () => string
+    workBoard: () => unknown
+    loadDesk: () => Promise<unknown>
+    deskIntervalMs?: number
+    intervalMs?: number
+  },
+) {
   res.writeHead(200, {
     'content-type': 'text/event-stream; charset=utf-8',
     'cache-control': 'no-store',
@@ -128,17 +163,17 @@ export function openPageLive(req, res, source) {
   let stopped = false
   let busy = false
   /** @type {string | null} */
-  let workStamp = null
+  let workStamp: string | null = null
   /** @type {unknown} */
-  let sentWork
+  let sentWork: unknown
   /** @type {unknown} */
-  let sentDesk
+  let sentDesk: unknown
   let lastDesk = 0
   let quiet = 0
   const deskIntervalMs = source.deskIntervalMs ?? 8000
   const intervalMs = source.intervalMs ?? 1000
   /** @type {ReturnType<typeof setInterval> | null} */
-  let timer = null
+  let timer: ReturnType<typeof setInterval> | null = null
   const stop = () => {
     if (stopped) return
     stopped = true
@@ -150,9 +185,9 @@ export function openPageLive(req, res, source) {
     busy = true
     try {
       /** @type {string} */
-      let deskFrame = ''
+      let deskFrame: string = ''
       /** @type {string} */
-      let workFrame = ''
+      let workFrame: string = ''
       const stamp = source.workStamp()
       if (stamp !== workStamp) {
         workStamp = stamp
@@ -190,7 +225,9 @@ export function openPageLive(req, res, source) {
     }
   }
   void pump()
-  timer = setInterval(() => { void pump() }, intervalMs)
+  timer = setInterval(() => {
+    void pump()
+  }, intervalMs)
   timer.unref?.()
   req.on('close', stop)
   res.on('error', stop)
@@ -205,9 +242,15 @@ export function openPageLive(req, res, source) {
  * @param {string} path
  * @param {URL} url
  * @param {Record<string, unknown>} body
- * @param {ReturnType<import('./work-worker.js').createWorkRuntime> | null} work
+ * @param {ReturnType<typeof import('./work-worker.js').createWorkRuntime> | null} work
  */
-export async function handleWorkApi(method, path, url, body, work) {
+export async function handleWorkApi(
+  method: string,
+  path: string,
+  url: URL,
+  body: Record<string, unknown>,
+  work: ReturnType<typeof import('./work-worker.ts').createWorkRuntime> | null,
+) {
   if (!path.startsWith('/session-foundations/api/work')) return null
   if (!work) return { status: 503, body: toolError('UNAVAILABLE', 'The work host is not attached yet.') }
   if (method === 'GET' && path === '/session-foundations/api/work/tickets') {

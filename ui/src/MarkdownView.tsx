@@ -22,7 +22,9 @@ function CodeBlock({ text, language }: { text: string; language?: string }) {
           {copied ? 'Copied' : 'Copy'}
         </button>
       </div>
-      <pre><code>{text}</code></pre>
+      <pre>
+        <code>{text}</code>
+      </pre>
     </div>
   )
 }
@@ -39,7 +41,14 @@ function Pre({ children }: { children?: ReactNode }) {
 }
 
 function fileTarget(href: string | undefined): { path: string; line?: number } | null {
-  if (!href || /^[a-z][a-z0-9+.-]*:/i.test(href) || href.startsWith('#') || href.startsWith('//') || href.startsWith('?')) return null
+  if (
+    !href ||
+    /^[a-z][a-z0-9+.-]*:/i.test(href) ||
+    href.startsWith('#') ||
+    href.startsWith('//') ||
+    href.startsWith('?')
+  )
+    return null
   const hash = href.indexOf('#')
   const destination = hash < 0 ? href : href.slice(0, hash)
   if (destination.includes('?')) return null
@@ -73,12 +82,21 @@ function markdownComponents(streaming: boolean, onOpenFile?: (path: string, line
       const file = streaming ? null : fileTarget(href)
       if (file && onOpenFile) {
         return (
-          <button type="button" className="file-mention" title={file.path} onClick={() => onOpenFile(file.path, file.line)}>
+          <button
+            type="button"
+            className="file-mention"
+            title={file.path}
+            onClick={() => onOpenFile(file.path, file.line)}
+          >
             {children}
           </button>
         )
       }
-      return <a href={href} target="_blank" rel="noreferrer">{children}</a>
+      return (
+        <a href={href} target="_blank" rel="noreferrer">
+          {children}
+        </a>
+      )
     },
   }
 }
@@ -90,7 +108,11 @@ function streamingSource(text: string, streaming: boolean): string {
   return text
 }
 
-export function MarkdownView({ text, streaming = false, onOpenFile }: {
+export function MarkdownView({
+  text,
+  streaming = false,
+  onOpenFile,
+}: {
   text: string
   streaming?: boolean
   onOpenFile?: (path: string, line?: number) => void

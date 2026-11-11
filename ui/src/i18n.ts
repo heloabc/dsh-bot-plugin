@@ -5,17 +5,17 @@ const en = {
   'lang.switch': '中文',
   'new.title': 'New bot',
   'new.close': 'Close',
-  'new.lead': 'The name shows in the list and is the bot\'s own name. Style and task become its persona.',
+  'new.lead': "The name shows in the list and is the bot's own name. Style and task become its persona.",
   'new.name': 'Bot name',
   'new.style': 'Bot style',
   'new.task': 'Bot task',
   'new.namePlaceholder': 'for example: Guide',
   'new.stylePlaceholder': 'for example: brief and direct',
-  'new.taskPlaceholder': 'for example: turn the user\'s notes into short sentences',
+  'new.taskPlaceholder': "for example: turn the user's notes into short sentences",
   'new.cancel': 'Cancel',
   'new.create': 'Create',
   'new.creating': 'Creating',
-  'new.nameRequired': 'Write this bot\'s name first.',
+  'new.nameRequired': "Write this bot's name first.",
   'new.created': 'Created "{name}".',
   'new.createFailed': 'Could not create the session.',
   'new.personaFailed': 'The session was created, but the persona was not applied.',
@@ -35,9 +35,12 @@ const en = {
   'session.purge': 'Delete',
   'session.archiveLabel': 'Archive blank session {name}',
   'session.purgeLabel': 'Delete blank session {name}',
-  'session.archiveConfirm': 'Archive {count} blank sessions? Sessions that already have messages stay. You can restore archived sessions from the official client.',
-  'session.purgeOneConfirm': 'Delete "{name}" permanently? The log is removed from disk and cannot be restored from the archive.',
-  'session.purgeAllConfirm': 'Permanently delete {count} blank sessions? Logs are removed from disk and cannot be restored. Sessions that already have messages stay.',
+  'session.archiveConfirm':
+    'Archive {count} blank sessions? Sessions that already have messages stay. You can restore archived sessions from the official client.',
+  'session.purgeOneConfirm':
+    'Delete "{name}" permanently? The log is removed from disk and cannot be restored from the archive.',
+  'session.purgeAllConfirm':
+    'Permanently delete {count} blank sessions? Logs are removed from disk and cannot be restored. Sessions that already have messages stay.',
   'session.notBlankArchive': 'This session already has content, so it cannot be removed as a blank session.',
   'session.archiveFailed': 'Could not remove this blank session.',
   'session.archiveSomeFailed': 'Some blank sessions could not be removed.',
@@ -86,7 +89,8 @@ const en = {
   'bot.untitled': 'Untitled',
   'inbox.received': 'sent a message',
   'inbox.open': 'Open bot messages, {who}: {line}',
-  'inbox.lead': 'These are the words bots sent each other. They do not include the other bot\'s persona, memory, or permissions.',
+  'inbox.lead':
+    "These are the words bots sent each other. They do not include the other bot's persona, memory, or permissions.",
   'inbox.empty': 'No bot messages yet.',
   'inbox.other': 'another bot',
   'inbox.sentTo': 'Sent to {name}',
@@ -111,7 +115,8 @@ const en = {
   'work.placeholder.many': 'Background work is running. You can say something else.',
   'work.placeholder.started': 'Background work has started. You can say something else.',
   'work.placeholder.needsUser': 'This box is still an ordinary message. Answer the ticket on the card above.',
-  'work.placeholder.ready': 'Send a message. The result becomes delivered only after the assistant writes it into the chat.',
+  'work.placeholder.ready':
+    'Send a message. The result becomes delivered only after the assistant writes it into the chat.',
   'work.placeholder.failed': 'This ticket has failed. You can say something else.',
   'work.fact.revision': 'Generation {revision}',
   'work.fact.accepted': 'The ticket is recorded and is not on the execution queue yet.',
@@ -324,12 +329,18 @@ export function readLocale(): Locale {
   try {
     const stored = localStorage.getItem(STORAGE)
     if (stored === 'en' || stored === 'zh') return stored
-  } catch { /* private mode */ }
+  } catch {
+    /* private mode */
+  }
   return 'en'
 }
 
 export function writeLocale(locale: Locale) {
-  try { localStorage.setItem(STORAGE, locale) } catch { /* private mode */ }
+  try {
+    localStorage.setItem(STORAGE, locale)
+  } catch {
+    /* private mode */
+  }
   if (typeof document !== 'undefined') document.documentElement.lang = locale === 'zh' ? 'zh-CN' : 'en'
 }
 

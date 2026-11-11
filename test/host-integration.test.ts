@@ -1,21 +1,27 @@
 import { strict as assert } from 'node:assert'
 import { spawn } from 'node:child_process'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
-import { homedir, tmpdir } from 'node:os'
+import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
 import { setTimeout as delay } from 'node:timers/promises'
 
+import { dshBin, nodeBin } from './dsh-bin.ts'
+
 const ROOT = new URL('..', import.meta.url).pathname
-const NODE = process.env.DSH_NODE
-  ?? (existsSync(`${homedir()}/.nvm/versions/node/v24.22.2/bin/node`) ? `${homedir()}/.nvm/versions/node/v24.22.2/bin/node` : process.execPath)
-const DSH = process.env.DSH_BIN
-  ?? (existsSync('/tmp/dsh-probe/node_modules/@deepseek-ai/dsh/lib/bin.js') ? '/tmp/dsh-probe/node_modules/@deepseek-ai/dsh/lib/bin.js' : '')
+const NODE = nodeBin()
+const DSH = dshBin(ROOT)
 
 test('real DSH 0.2.2-rc.1 host: section, tools, isolation, restart, compaction', { timeout: 180000 }, async () => {
-  assert.equal(NODE.includes('v24') || process.env.DSH_NODE != null || Number(process.versions.node.split('.')[0]) >= 24, true)
+  assert.equal(
+    NODE.includes('v24') || process.env.DSH_NODE != null || Number(process.versions.node.split('.')[0]) >= 24,
+    true,
+  )
   const version = await run(NODE, ['-p', 'process.versions.node'])
-  assert.ok(Number(version.stdout.trim().split('.')[0]) >= 24, `host integration needs Node >= 24.9, got ${version.stdout}`)
+  assert.ok(
+    Number(version.stdout.trim().split('.')[0]) >= 24,
+    `host integration needs Node >= 24.9, got ${version.stdout}`,
+  )
   assert.ok(DSH !== '' && existsSync(DSH), 'set DSH_BIN to the @deepseek-ai/dsh@0.2.2-rc.1 bin.js')
   const pkg = JSON.parse(readFileSync(join(DSH, '../../package.json'), 'utf8'))
   assert.equal(pkg.version, '0.2.2-rc.1')
@@ -24,7 +30,9 @@ test('real DSH 0.2.2-rc.1 host: section, tools, isolation, restart, compaction',
   const work = mkdtempSync(join(tmpdir(), 'sf-dsh-work-'))
   writeFileSync('/tmp/sf-host-paths.txt', `${home}\n${work}\n`)
   const patch = join(work, 'patch.yml')
-  writeFileSync(patch, `
+  writeFileSync(
+    patch,
+    `
 - id: agent-default-model
   config:
     provider: foundations-mock
@@ -39,7 +47,8 @@ test('real DSH 0.2.2-rc.1 host: section, tools, isolation, restart, compaction',
         contextWindow: 128000
     - id: session-foundations-http
       name: ${JSON.stringify(join(ROOT, 'dist/http-plugin.js'))}
-`)
+`,
+  )
   const port = 31991
   const origin = `http://127.0.0.1:${port}`
   const env = {
@@ -89,8 +98,12 @@ test('real DSH 0.2.2-rc.1 host: section, tools, isolation, restart, compaction',
     const sessionB = createdB.result?.value?.sessionId
     assert.equal(typeof sessionA, 'string')
     assert.notEqual(sessionA, sessionB)
-    await rpc(origin, cookie, 'session/selectModel', { request: { sessionId: sessionA, provider: 'foundations-mock', model: 'mock-1' } })
-    await rpc(origin, cookie, 'session/selectModel', { request: { sessionId: sessionB, provider: 'foundations-mock', model: 'mock-1' } })
+    await rpc(origin, cookie, 'session/selectModel', {
+      request: { sessionId: sessionA, provider: 'foundations-mock', model: 'mock-1' },
+    })
+    await rpc(origin, cookie, 'session/selectModel', {
+      request: { sessionId: sessionB, provider: 'foundations-mock', model: 'mock-1' },
+    })
     await plugin(origin, cookie, '/session-foundations/api/sessions/mark', { sessionId: sessionA })
 
     const persona = await plugin(origin, cookie, '/session-foundations/api/persona/confirm', {
@@ -102,7 +115,10 @@ test('real DSH 0.2.2-rc.1 host: section, tools, isolation, restart, compaction',
 
     const skillDir = join(home, 'profiles', 'web', 'session-foundations', 'src', 'skills', 'private', sessionA, 'taste')
     mkdirSync(skillDir, { recursive: true })
-    writeFileSync(join(skillDir, 'SKILL.md'), '---\nversion: 0.1.0\ndescription: session A only\n---\nDo not grant tools.\n')
+    writeFileSync(
+      join(skillDir, 'SKILL.md'),
+      '---\nversion: 0.1.0\ndescription: session A only\n---\nDo not grant tools.\n',
+    )
     const registered = await plugin(origin, cookie, '/session-foundations/api/skills/register', {
       sessionId: sessionA,
       scope: 'private',
@@ -110,22 +126,47 @@ test('real DSH 0.2.2-rc.1 host: section, tools, isolation, restart, compaction',
     })
     assert.equal(registered.ok, true)
 
-    await promptAndWait(origin, cookie, sessionA, `FOUNDATIONS_TOOL foundations_remember ${JSON.stringify({
-      target: 'fact',
-      content: 'The user is called Ada',
-      idempotencyKey: 'host-remember',
-      sessionId: sessionB,
-    })}`)
-    const statusA = await pluginGet(origin, cookie, `/session-foundations/api/status?sessionId=${encodeURIComponent(sessionA)}`)
-    const memoryA = await pluginGet(origin, cookie, `/session-foundations/api/memory?sessionId=${encodeURIComponent(sessionA)}`)
-    const memoryB = await pluginGet(origin, cookie, `/session-foundations/api/memory?sessionId=${encodeURIComponent(sessionB)}`)
+    await promptAndWait(
+      origin,
+      cookie,
+      sessionA,
+      `FOUNDATIONS_TOOL foundations_remember ${JSON.stringify({
+        target: 'fact',
+        content: 'The user is called Ada',
+        idempotencyKey: 'host-remember',
+        sessionId: sessionB,
+      })}`,
+    )
+    const statusA = await pluginGet(
+      origin,
+      cookie,
+      `/session-foundations/api/status?sessionId=${encodeURIComponent(sessionA)}`,
+    )
+    const memoryA = await pluginGet(
+      origin,
+      cookie,
+      `/session-foundations/api/memory?sessionId=${encodeURIComponent(sessionA)}`,
+    )
+    const memoryB = await pluginGet(
+      origin,
+      cookie,
+      `/session-foundations/api/memory?sessionId=${encodeURIComponent(sessionB)}`,
+    )
     evidence.memoryA = memoryA
     evidence.memoryB = memoryB
-    assert.equal(memoryA.facts.some((fact: any) => fact.content === 'The user is called Ada' && fact.status === 'active'), true)
+    assert.equal(
+      memoryA.facts.some((fact: any) => fact.content === 'The user is called Ada' && fact.status === 'active'),
+      true,
+    )
     assert.equal(memoryB.facts.length, 0)
     evidence.baseChecks.push('A5-foreign-session-ignored')
 
-    await promptAndWait(origin, cookie, sessionB, `FOUNDATIONS_TOOL foundations_skill_load ${JSON.stringify({ skillId: 'taste', sessionId: sessionA })}`)
+    await promptAndWait(
+      origin,
+      cookie,
+      sessionB,
+      `FOUNDATIONS_TOOL foundations_skill_load ${JSON.stringify({ skillId: 'taste', sessionId: sessionA })}`,
+    )
     const eventsB = await eventsOf(origin, cookie, sessionB)
     const loadText = JSON.stringify(eventsB)
     assert.match(loadText, /NOT_FOUND|FORBIDDEN/)
@@ -136,9 +177,19 @@ test('real DSH 0.2.2-rc.1 host: section, tools, isolation, restart, compaction',
     let eventsA = await eventsOf(origin, cookie, sessionA)
     const contextMessages = eventsA.filter(isRuntimeContext)
     evidence.contextMessagesBeforeCompact = contextMessages.length
-    assert.ok(eventsA.some(event => textOfEvent(event).includes('You are the local test persona') || textOfEvent(event).includes('foundations:rules') || textOfEvent(event).includes('[foundations:')))
+    assert.ok(
+      eventsA.some(
+        event =>
+          textOfEvent(event).includes('You are the local test persona') ||
+          textOfEvent(event).includes('foundations:rules') ||
+          textOfEvent(event).includes('[foundations:'),
+      ),
+    )
     evidence.baseChecks.push('A1-prompt-visible')
-    const sameHashDup = contextMessages.filter(event => textOfEvent(event).includes('[foundations:user]') || textOfEvent(event).includes('The user is called Ada'))
+    const sameHashDup = contextMessages.filter(
+      event =>
+        textOfEvent(event).includes('[foundations:user]') || textOfEvent(event).includes('The user is called Ada'),
+    )
     evidence.sameMaterialContextCount = sameHashDup.length
 
     const compact = await rpc(origin, cookie, 'commands/execute', {
@@ -150,7 +201,11 @@ test('real DSH 0.2.2-rc.1 host: section, tools, isolation, restart, compaction',
     eventsA = await eventsOf(origin, cookie, sessionA)
     const compactTypes = eventsA.map(event => event.type).filter(type => String(type).startsWith('compaction/'))
     evidence.compactionEvents = compactTypes
-    const statusAfter = await pluginGet(origin, cookie, `/session-foundations/api/status?sessionId=${encodeURIComponent(sessionA)}`)
+    const statusAfter = await pluginGet(
+      origin,
+      cookie,
+      `/session-foundations/api/status?sessionId=${encodeURIComponent(sessionA)}`,
+    )
     evidence.epochAfterCompact = statusAfter.binding?.compaction_epoch ?? null
     evidence.presenceAfterCompact = statusAfter.view?.presence ?? null
     if (compactTypes.includes('compaction/end')) evidence.baseChecks.push('A6-compaction-observed')
@@ -163,7 +218,11 @@ test('real DSH 0.2.2-rc.1 host: section, tools, isolation, restart, compaction',
     evidence.contextMessagesAfterReinject = reinjected.length
     assert.ok(reinjected.some(event => textOfEvent(event).includes('The user is called Ada')))
     assert.ok(reinjected.length > evidence.contextMessagesAfterCompact)
-    const statusReinject = await pluginGet(origin, cookie, `/session-foundations/api/status?sessionId=${encodeURIComponent(sessionA)}`)
+    const statusReinject = await pluginGet(
+      origin,
+      cookie,
+      `/session-foundations/api/status?sessionId=${encodeURIComponent(sessionA)}`,
+    )
     evidence.presenceAfterReinject = statusReinject.view?.presence ?? null
     assert.equal(statusReinject.view?.presence, 'present')
     evidence.baseChecks.push('A2-reinject-after-compact')
@@ -185,7 +244,11 @@ test('real DSH 0.2.2-rc.1 host: section, tools, isolation, restart, compaction',
     evidence.resumedSessions = sessions
     let restored = null
     for (const sessionId of sessions) {
-      const memory = await pluginGet(origin, cookie, `/session-foundations/api/memory?sessionId=${encodeURIComponent(sessionId)}`)
+      const memory = await pluginGet(
+        origin,
+        cookie,
+        `/session-foundations/api/memory?sessionId=${encodeURIComponent(sessionId)}`,
+      )
       if (memory.facts?.some((fact: any) => fact.content === 'The user is called Ada')) restored = memory
     }
     assert.ok(restored, 'fact survived process restart')
@@ -213,10 +276,14 @@ test('real DSH 0.2.2-rc.1 host: section, tools, isolation, restart, compaction',
  * @param {string} logPath
  */
 function start(env: any, patch: any, port: any, logPath: any) {
-  const child = spawn(NODE, [DSH, '--profile', 'web', '--patch', patch, '--host', '127.0.0.1', '--port', String(port), '--no-open'], {
-    env,
-    stdio: ['ignore', 'pipe', 'pipe'],
-  })
+  const child = spawn(
+    NODE,
+    [DSH, '--profile', 'web', '--patch', patch, '--host', '127.0.0.1', '--port', String(port), '--no-open'],
+    {
+      env,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    },
+  )
   child.stdout.on('data', chunk => writeFileSync(logPath, chunk, { flag: 'a' }))
   child.stderr.on('data', chunk => writeFileSync(logPath, chunk, { flag: 'a' }))
   return Object.assign(child, { logPath })
@@ -347,7 +414,7 @@ async function eventsOf(origin: any, cookie: any, sessionId: any) {
   const value = page.result?.value ?? page.result
   const records = value?.records ?? value?.events ?? value?.items ?? []
   if (!Array.isArray(records)) return []
-  return records.map(record => record?.type === 'event' && record.event ? record.event : record)
+  return records.map(record => (record?.type === 'event' && record.event ? record.event : record))
 }
 
 /**
@@ -377,12 +444,16 @@ function extractIds(value: any) {
  * @param {string[]} args
  */
 function run(command: string, args: string[]) {
-  return new Promise<{ code: number | null, stdout: string, stderr: string }>((resolve, reject) => {
+  return new Promise<{ code: number | null; stdout: string; stderr: string }>((resolve, reject) => {
     const child = spawn(command, args, { stdio: ['ignore', 'pipe', 'pipe'] })
     let stdout = ''
     let stderr = ''
-    child.stdout.on('data', chunk => { stdout += chunk })
-    child.stderr.on('data', chunk => { stderr += chunk })
+    child.stdout.on('data', chunk => {
+      stdout += chunk
+    })
+    child.stderr.on('data', chunk => {
+      stderr += chunk
+    })
     child.on('error', reject)
     child.on('exit', code => resolve({ code, stdout, stderr }))
   })

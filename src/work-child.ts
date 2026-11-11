@@ -11,10 +11,12 @@ export const WORKER_FILE_PRESET = 'foundations-files'
 /**
  * @param {import('@deepseek-ai/cordis').Context} ctx
  */
-function presetsOf(ctx) {
+function presetsOf(ctx: import('./host.ts').HostContext) {
   try {
     if (typeof ctx.get === 'function') return ctx.get('agentPresets') ?? null
-  } catch { /* preset service is optional until a worker is created */ }
+  } catch {
+    /* preset service is optional until a worker is created */
+  }
   try {
     return ctx.agentPresets ?? null
   } catch {
@@ -27,23 +29,26 @@ function presetsOf(ctx) {
  * is the same preset and is not an error.
  * @param {import('@deepseek-ai/cordis').Context} ctx
  */
-export function ensureWorkerFilePreset(ctx) {
+export function ensureWorkerFilePreset(ctx: import('./host.ts').HostContext) {
   const presets = presetsOf(ctx)
   if (!presets?.register || !presets?.mount) return Promise.resolve(null)
-  return presets.register({
-    id: WORKER_FILE_PRESET,
-    plugins: [
-      {
-        id: 'tool-fs',
-        name: '@deepseek-ai/dsh-tool-fs',
-        config: { applyPatch: false, readImage: false },
-      },
-    ],
-  }).then(() => WORKER_FILE_PRESET).catch(error => {
-    const message = error instanceof Error ? error.message : String(error)
-    if (message.includes('Duplicate')) return WORKER_FILE_PRESET
-    throw error
-  })
+  return presets
+    .register({
+      id: WORKER_FILE_PRESET,
+      plugins: [
+        {
+          id: 'tool-fs',
+          name: '@deepseek-ai/dsh-tool-fs',
+          config: { applyPatch: false, readImage: false },
+        },
+      ],
+    })
+    .then(() => WORKER_FILE_PRESET)
+    .catch((error: any) => {
+      const message = error instanceof Error ? error.message : String(error)
+      if (message.includes('Duplicate')) return WORKER_FILE_PRESET
+      throw error
+    })
 }
 
 /**
@@ -53,13 +58,12 @@ export function ensureWorkerFilePreset(ctx) {
  * @param {import('@deepseek-ai/cordis').Context} ctx
  * @param {string | null} presetId
  */
-export function workerFileSetup(ctx, presetId) {
-  return async (agentCtx, agent) => {
+export function workerFileSetup(ctx: import('./host.ts').HostContext, presetId: string | null) {
+  return async (agentCtx: any, agent: any) => {
     const presets = presetsOf(ctx)
     if (!presets?.mount) return
-    const recorded = agent?.session && typeof presets.presetForSession === 'function'
-      ? presets.presetForSession(agent.session)
-      : null
+    const recorded =
+      agent?.session && typeof presets.presetForSession === 'function' ? presets.presetForSession(agent.session) : null
     const id = presetId || recorded || presets.defaultId
     if (!id) return
     const resolved = typeof presets.resolve === 'function' ? await presets.resolve(id) : { id }

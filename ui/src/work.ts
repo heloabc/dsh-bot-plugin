@@ -40,7 +40,10 @@ export function workLabel(status: string, t: Copy = english): string {
 }
 
 export function isTicketNotice(text: string): boolean {
-  return text.replace(/^\uFEFF/, '').trimStart().startsWith('[foundations:ticket]')
+  return text
+    .replace(/^\uFEFF/, '')
+    .trimStart()
+    .startsWith('[foundations:ticket]')
 }
 
 export interface WorkBriefing {
@@ -55,7 +58,10 @@ export interface WorkBriefing {
 
 /** The worker's task envelope. Ordinary user text stays a bubble. */
 export function parseBriefing(text: string): WorkBriefing | null {
-  const normalized = text.replace(/^\uFEFF/, '').replace(/\r\n/g, '\n').trimStart()
+  const normalized = text
+    .replace(/^\uFEFF/, '')
+    .replace(/\r\n/g, '\n')
+    .trimStart()
   if (!normalized.startsWith('[foundations:briefing]')) return null
   const rest = normalized.slice('[foundations:briefing]'.length).replace(/^\n/, '')
   const splitAt = rest.indexOf('\n---\n')
@@ -109,10 +115,13 @@ export function readLiveCardsByOwner(body: Record<string, unknown>): Record<stri
 }
 
 /** The page stream nests the board under work. A bare board still parses. */
-export function readLiveBoard(body: Record<string, unknown>): { signals: Record<string, string[]>, cards: Record<string, WorkTicket[]> } | null {
-  const scope = body.work && typeof body.work === 'object' && !Array.isArray(body.work)
-    ? body.work as Record<string, unknown>
-    : body
+export function readLiveBoard(
+  body: Record<string, unknown>,
+): { signals: Record<string, string[]>; cards: Record<string, WorkTicket[]> } | null {
+  const scope =
+    body.work && typeof body.work === 'object' && !Array.isArray(body.work)
+      ? (body.work as Record<string, unknown>)
+      : body
   if (!('signals' in scope) && !('cards' in scope)) return null
   return { signals: readLiveSignals(scope), cards: readLiveCardsByOwner(scope) }
 }
@@ -135,7 +144,9 @@ export function readTicket(body: Record<string, unknown>, summary = '', t: Copy 
   if (typeof row.id !== 'string' || typeof row.status !== 'string') return null
   const attempts = Array.isArray(body.attempts) ? body.attempts : []
   const active = typeof row.active_attempt_id === 'string' ? row.active_attempt_id : ''
-  const attempt = attempts.find(item => item && typeof item === 'object' && (item as { id?: unknown }).id === active) as { started_at?: unknown } | undefined
+  const attempt = attempts.find(item => item && typeof item === 'object' && (item as { id?: unknown }).id === active) as
+    | { started_at?: unknown }
+    | undefined
   const events = Array.isArray(body.events) ? body.events.flatMap(readEvent) : []
   const child = typeof row.child_session_id === 'string' ? row.child_session_id : ''
   const title = summary.trim() || t('work.ticket')
@@ -176,10 +187,14 @@ export function chatStatus(activity: string, t: Copy = english): string {
 }
 
 /** Memory and ticket tools stay off the chat surface. Host tools still get one row. */
-export function bookkeepingOnly(segments: readonly { kind: string, name?: string }[]): boolean {
-  return segments.length > 0 && segments.every(segment => (
-    segment.kind === 'think' || (segment.kind === 'tool' && (segment.name ?? '').startsWith('foundations_'))
-  ))
+export function bookkeepingOnly(segments: readonly { kind: string; name?: string }[]): boolean {
+  return (
+    segments.length > 0 &&
+    segments.every(
+      segment =>
+        segment.kind === 'think' || (segment.kind === 'tool' && (segment.name ?? '').startsWith('foundations_')),
+    )
+  )
 }
 
 const WORKING = new Set(['accepted', 'enqueued', 'started'])
@@ -246,20 +261,23 @@ export function ticketFacts(ticket: WorkTicket, now: number, t: Copy = english):
   return lines
 }
 
-export function questionView(ticket: WorkTicket): { text: string, stale: boolean } | null {
+export function questionView(ticket: WorkTicket): { text: string; stale: boolean } | null {
   const questions = ticket.events.filter(event => event.kind === 'question' && event.text.trim() !== '')
   if (ticket.status === 'needs_user') {
     const live = questions.filter(event => event.revision === ticket.revision && event.applyStatus !== 'stale').at(-1)
     return { text: live?.text ?? '', stale: false }
   }
-  if (ticket.revision > 1 && (ticket.status === 'enqueued' || ticket.status === 'accepted' || ticket.status === 'started')) {
+  if (
+    ticket.revision > 1 &&
+    (ticket.status === 'enqueued' || ticket.status === 'accepted' || ticket.status === 'started')
+  ) {
     const stale = [...questions].reverse().find(event => event.applyStatus === 'stale')
     if (stale) return { text: stale.text, stale: true }
   }
   return null
 }
 
-export function dispatchTicketId(tool: { name: string, result: string }): string | null {
+export function dispatchTicketId(tool: { name: string; result: string }): string | null {
   if (tool.name !== 'foundations_dispatch' || tool.result.trim() === '') return null
   const parsed = parseResult(tool.result)
   if (parsed) {
@@ -270,7 +288,7 @@ export function dispatchTicketId(tool: { name: string, result: string }): string
   return match?.[1] ?? null
 }
 
-export function isBudgetRefusal(tool: { name: string, result: string }): boolean {
+export function isBudgetRefusal(tool: { name: string; result: string }): boolean {
   if (tool.name !== 'foundations_dispatch' || tool.result.trim() === '') return false
   const parsed = parseResult(tool.result)
   if (parsed) return parsed.ok === false && parsed.code === 'BUDGET'
@@ -304,7 +322,13 @@ function focusTicket(tickets: readonly WorkTicket[]): WorkTicket | null {
 }
 
 function latestProgress(ticket: WorkTicket): string {
-  const rows = ticket.events.filter(event => event.kind === 'progress' && event.applyStatus === 'applied' && event.revision === ticket.revision && event.text.trim() !== '')
+  const rows = ticket.events.filter(
+    event =>
+      event.kind === 'progress' &&
+      event.applyStatus === 'applied' &&
+      event.revision === ticket.revision &&
+      event.text.trim() !== '',
+  )
   return rows.at(-1)?.text ?? ''
 }
 
@@ -312,20 +336,22 @@ function readEvent(value: unknown): WorkEvent[] {
   if (!value || typeof value !== 'object') return []
   const row = value as Record<string, unknown>
   if (typeof row.event_id !== 'string' || typeof row.kind !== 'string') return []
-  return [{
-    eventId: row.event_id,
-    kind: row.kind,
-    applyStatus: typeof row.apply_status === 'string' ? row.apply_status : '',
-    revision: typeof row.briefing_revision === 'number' ? row.briefing_revision : 0,
-    text: typeof row.text === 'string' ? row.text : '',
-  }]
+  return [
+    {
+      eventId: row.event_id,
+      kind: row.kind,
+      applyStatus: typeof row.apply_status === 'string' ? row.apply_status : '',
+      revision: typeof row.briefing_revision === 'number' ? row.briefing_revision : 0,
+      text: typeof row.text === 'string' ? row.text : '',
+    },
+  ]
 }
 
-function parseResult(result: string): { ok?: unknown, code?: unknown, message?: unknown, ticketId?: unknown } | null {
+function parseResult(result: string): { ok?: unknown; code?: unknown; message?: unknown; ticketId?: unknown } | null {
   try {
     const parsed = JSON.parse(result) as unknown
     if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null
-    return parsed as { ok?: unknown, code?: unknown, message?: unknown, ticketId?: unknown }
+    return parsed as { ok?: unknown; code?: unknown; message?: unknown; ticketId?: unknown }
   } catch {
     return null
   }

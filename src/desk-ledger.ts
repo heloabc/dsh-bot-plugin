@@ -7,7 +7,7 @@ import { dirname } from 'node:path'
 /**
  * @param {string} file
  */
-export function openLedger(file) {
+export function openLedger(file: string) {
   mkdirSync(dirname(file), { recursive: true, mode: 0o700 })
   let state: LedgerFile = { sessions: {}, tasks: {} }
   try {
@@ -32,7 +32,7 @@ export function openLedger(file) {
      * @param {string} key
      * @param {string} sessionId
      */
-    rememberSession(key, sessionId) {
+    rememberSession(key: string, sessionId: string) {
       const existing = state.sessions[key]
       if (existing) return existing
       const record = { sessionId, createdAt: new Date().toISOString() }
@@ -41,14 +41,14 @@ export function openLedger(file) {
       return record
     },
     /** @param {string} key */
-    session(key) {
+    session(key: string) {
       return state.sessions[key]
     },
     /**
      * @param {string} key
      * @param {Omit<TaskRecord, 'id' | 'createdAt'>} input
      */
-    rememberTask(key, input) {
+    rememberTask(key: string, input: Omit<TaskRecord, 'id' | 'createdAt'>) {
       const existing = state.tasks[key]
       if (existing) return { record: existing, created: false }
       const record = { id: randomUUID(), createdAt: new Date().toISOString(), ...input }
@@ -60,14 +60,14 @@ export function openLedger(file) {
      * @param {string} id
      * @returns {TaskRecord | undefined}
      */
-    task(id) {
+    task(id: string): TaskRecord | undefined {
       return tasksOf().find(item => item.id === id)
     },
     /**
      * @param {string} id
      * @param {Partial<TaskRecord>} patch
      */
-    updateTask(id, patch) {
+    updateTask(id: string, patch: Partial<TaskRecord>) {
       const key = Object.entries(state.tasks).find(([, item]) => item.id === id)?.[0]
       if (key === undefined) return undefined
       state.tasks[key] = { ...state.tasks[key], ...patch, id }
@@ -84,7 +84,7 @@ export function openLedger(file) {
  * @param {string} value
  * @returns {boolean}
  */
-export function validIdempotencyKey(value) {
+export function validIdempotencyKey(value: string): boolean {
   return typeof value === 'string' && /^[A-Za-z0-9._:-]{8,200}$/.test(value)
 }
 

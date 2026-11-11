@@ -16,17 +16,29 @@ test('an unchanged document has no patch', () => {
 
 test('a timestamp change does not repeat the session list', () => {
   const prev = {
-    sessions: { result: { value: { items: [
-      { sessionId: 'a', projections: { values: { title: 'alpha' } } },
-      { sessionId: 'b', projections: { values: { title: 'beta' } } },
-    ] } } },
+    sessions: {
+      result: {
+        value: {
+          items: [
+            { sessionId: 'a', projections: { values: { title: 'alpha' } } },
+            { sessionId: 'b', projections: { values: { title: 'beta' } } },
+          ],
+        },
+      },
+    },
     usage: { summary: { fetched_at: 't0', daily: [{ date: '2026-11-10', usage_usd: 1 }] } },
   }
   const next = {
-    sessions: { result: { value: { items: [
-      { sessionId: 'a', projections: { values: { title: 'alpha' } } },
-      { sessionId: 'b', projections: { values: { title: 'beta-edited' } } },
-    ] } } },
+    sessions: {
+      result: {
+        value: {
+          items: [
+            { sessionId: 'a', projections: { values: { title: 'alpha' } } },
+            { sessionId: 'b', projections: { values: { title: 'beta-edited' } } },
+          ],
+        },
+      },
+    },
     usage: { summary: { fetched_at: 't1', daily: [{ date: '2026-11-10', usage_usd: 1 }] } },
   }
   const patch = roundTrip(prev, next)
@@ -38,8 +50,15 @@ test('a timestamp change does not repeat the session list', () => {
 })
 
 test('a removed session and a reordered list survive the patch', () => {
-  const prev = [{ sessionId: 'a', n: 1 }, { sessionId: 'b', n: 2 }, { sessionId: 'c', n: 3 }]
-  const next = [{ sessionId: 'c', n: 3 }, { sessionId: 'a', n: 1 }]
+  const prev = [
+    { sessionId: 'a', n: 1 },
+    { sessionId: 'b', n: 2 },
+    { sessionId: 'c', n: 3 },
+  ]
+  const next = [
+    { sessionId: 'c', n: 3 },
+    { sessionId: 'a', n: 1 },
+  ]
   const patch = roundTrip(prev, next)
   if (patch.t !== 'l') throw new Error(`expected a list patch, got ${patch.t}`)
   assert.deepEqual(patch.d, ['b'])
@@ -50,26 +69,30 @@ test('a removed session and a reordered list survive the patch', () => {
 test('one ticket result does not repeat the other event text', () => {
   const prev = {
     cards: {
-      owner: [{
-        summary: 'KEEP-SUMMARY',
-        ticket: { id: 't1', status: 'ready' },
-        events: [
-          { event_id: 'e1', text: 'OLD-RESULT' },
-          { event_id: 'e2', text: 'KEEP-PROGRESS' },
-        ],
-      }],
+      owner: [
+        {
+          summary: 'KEEP-SUMMARY',
+          ticket: { id: 't1', status: 'ready' },
+          events: [
+            { event_id: 'e1', text: 'OLD-RESULT' },
+            { event_id: 'e2', text: 'KEEP-PROGRESS' },
+          ],
+        },
+      ],
     },
   }
   const next = {
     cards: {
-      owner: [{
-        summary: 'KEEP-SUMMARY',
-        ticket: { id: 't1', status: 'delivered' },
-        events: [
-          { event_id: 'e1', text: 'NEW-RESULT' },
-          { event_id: 'e2', text: 'KEEP-PROGRESS' },
-        ],
-      }],
+      owner: [
+        {
+          summary: 'KEEP-SUMMARY',
+          ticket: { id: 't1', status: 'delivered' },
+          events: [
+            { event_id: 'e1', text: 'NEW-RESULT' },
+            { event_id: 'e2', text: 'KEEP-PROGRESS' },
+          ],
+        },
+      ],
     },
   }
   const patch = roundTrip(prev, next)

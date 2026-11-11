@@ -22,11 +22,14 @@ test('a preview is reloaded from the same file and a bad row is dropped', () => 
     assert.equal(long.ok, true)
     if (!long.ok) return
     assert.equal(long.preview!.length, 80)
-    assert.equal(second.rememberAll({
-      'session-kept': 'kept',
-      '../etc': 'no',
-      'session-blank': '   ',
-    }).stored, 1)
+    assert.equal(
+      second.rememberAll({
+        'session-kept': 'kept',
+        '../etc': 'no',
+        'session-blank': '   ',
+      }).stored,
+      1,
+    )
     assert.equal(second.all()['session-kept'], 'kept')
     assert.equal(second.all()['../etc'], undefined)
     second.forget('session-abc')

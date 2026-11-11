@@ -3,7 +3,13 @@ import { outboundPeer, type BotExchangeItem } from './bot-chat'
 import { BotMessageCard } from './BotMessageCard'
 import { useI18n } from './locale'
 
-export function InboxLine({ who, preview, time, mark, onOpen }: {
+export function InboxLine({
+  who,
+  preview,
+  time,
+  mark,
+  onOpen,
+}: {
   who: string
   preview: string
   time?: string
@@ -15,7 +21,9 @@ export function InboxLine({ who, preview, time, mark, onOpen }: {
   return (
     <div className="inbox-line" data-turn={mark}>
       <button type="button" className="inbox-entry" onClick={onOpen} aria-label={t('inbox.open', { who, line })}>
-        <span className="inbox-icon"><InboxIcon /></span>
+        <span className="inbox-icon">
+          <InboxIcon />
+        </span>
         <span className="inbox-copy">
           <strong>{who}</strong>
           <span>{line}</span>
@@ -26,7 +34,11 @@ export function InboxLine({ who, preview, time, mark, onOpen }: {
   )
 }
 
-export function BotChatView({ items, botLabel, onOpenFile }: {
+export function BotChatView({
+  items,
+  botLabel,
+  onOpenFile,
+}: {
   items: readonly BotExchangeItem[]
   botLabel: (sessionId: string) => string
   onOpenFile: (path: string, line?: number) => void
@@ -36,19 +48,25 @@ export function BotChatView({ items, botLabel, onOpenFile }: {
     <div className="bot-chat">
       <Lead />
       {items.length === 0 ? <Empty /> : null}
-      {items.map(item => item.kind === 'in' ? (
-        <div key={item.id} className="mail-row">
-          <BotMessageCard mail={item.mail} label={botLabel(item.mail.from)} onOpenFile={onOpenFile} />
-          {clock(item.time, locale) ? <time>{clock(item.time, locale)}</time> : null}
-        </div>
-      ) : (
-        <OutboundLine key={item.id} item={item} items={items} botLabel={botLabel} />
-      ))}
+      {items.map(item =>
+        item.kind === 'in' ? (
+          <div key={item.id} className="mail-row">
+            <BotMessageCard mail={item.mail} label={botLabel(item.mail.from)} onOpenFile={onOpenFile} />
+            {clock(item.time, locale) ? <time>{clock(item.time, locale)}</time> : null}
+          </div>
+        ) : (
+          <OutboundLine key={item.id} item={item} items={items} botLabel={botLabel} />
+        ),
+      )}
     </div>
   )
 }
 
-function OutboundLine({ item, items, botLabel }: {
+function OutboundLine({
+  item,
+  items,
+  botLabel,
+}: {
   item: Extract<BotExchangeItem, { kind: 'out' }>
   items: readonly BotExchangeItem[]
   botLabel: (sessionId: string) => string
@@ -85,8 +103,20 @@ function clock(time: number | undefined, locale: string): string {
 function InboxIcon() {
   return (
     <svg viewBox="0 0 24 24" aria-hidden="true">
-      <path d="M4 13.2 6.4 5.5h11.2L20 13.2" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinejoin="round" />
-      <path d="M4 13.2h4.1l1.1 2h5.6l1.1-2H20V19a1.4 1.4 0 0 1-1.4 1.4H5.4A1.4 1.4 0 0 1 4 19Z" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinejoin="round" />
+      <path
+        d="M4 13.2 6.4 5.5h11.2L20 13.2"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.6"
+        strokeLinejoin="round"
+      />
+      <path
+        d="M4 13.2h4.1l1.1 2h5.6l1.1-2H20V19a1.4 1.4 0 0 1-1.4 1.4H5.4A1.4 1.4 0 0 1 4 19Z"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.6"
+        strokeLinejoin="round"
+      />
     </svg>
   )
 }

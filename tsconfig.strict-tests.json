@@ -1,7 +1,0 @@
-{
-  "extends": "./tsconfig.typecheck.json",
-  "compilerOptions": {
-    "noImplicitAny": true,
-    "strictNullChecks": true
-  }
-}

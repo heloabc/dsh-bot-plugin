@@ -20,11 +20,17 @@ test('private skill stays in its session and revocation is immediate', async () 
   const { store, engine } = setup()
   const root = join(store.root, 'src', 'skills', 'private', 'session-a', 'taste')
   mkdirSync(root, { recursive: true })
-  writeFileSync(join(root, 'SKILL.md'), '---\nversion: 1.2.0\ndescription: taste notes\n---\nRecord taste only. Do not grant tools.\n')
+  writeFileSync(
+    join(root, 'SKILL.md'),
+    '---\nversion: 1.2.0\ndescription: taste notes\n---\nRecord taste only. Do not grant tools.\n',
+  )
   const row = engine.registerSkillFromDisk('session-a', 'private', 'taste')
   assert.equal(row.version, '1.2.0')
   const tools = Object.fromEntries(toolDefinitions(engine, () => 1).map(item => [item.name, item]))
-  const loaded = await tools.foundations_skill_load.execute({ skillId: 'taste', sessionId: 'session-b' }, { agent: { id: 'session-a' } })
+  const loaded = await tools.foundations_skill_load.execute(
+    { skillId: 'taste', sessionId: 'session-b' },
+    { agent: { id: 'session-a' } },
+  )
   assert.equal(loaded.ok, true)
   assert.equal(loaded.data.grantsTools, false)
   const other = await tools.foundations_skill_load.execute({ skillId: 'taste' }, { agent: { id: 'session-b' } })
@@ -44,9 +50,16 @@ test('symlink and parent escape are refused', () => {
   const linkRoot = join(store.root, 'src', 'skills', 'public', 'escape')
   mkdirSync(join(store.root, 'src', 'skills', 'public'), { recursive: true })
   symlinkSync(outside, linkRoot)
-  assert.throws(() => engine.registerSkillFromDisk('session-a', 'public', 'escape'), (error: unknown) => error instanceof Error && 'code' in error && error.code === 'FORBIDDEN')
+  assert.throws(
+    () => engine.registerSkillFromDisk('session-a', 'public', 'escape'),
+    (error: unknown) => error instanceof Error && 'code' in error && error.code === 'FORBIDDEN',
+  )
   const dot = join(store.root, 'src', 'skills', 'public', '..', '..', 'outside', 'SKILL.md')
-  assert.throws(() => engine.registerSkillFromDisk('session-a', 'public', '..'), (error: unknown) => error instanceof Error && 'code' in error && (error.code === 'VALIDATION' || error.code === 'FORBIDDEN'))
+  assert.throws(
+    () => engine.registerSkillFromDisk('session-a', 'public', '..'),
+    (error: unknown) =>
+      error instanceof Error && 'code' in error && (error.code === 'VALIDATION' || error.code === 'FORBIDDEN'),
+  )
   assert.ok(dot)
   store.close()
 })

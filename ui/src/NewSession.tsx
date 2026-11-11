@@ -48,9 +48,10 @@ export function NewSessionSheet({
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ sessionId, personaText, idempotencyKey: crypto.randomUUID() }),
     })
-    const note = opened.body.ok === true
-      ? text('new.created', { name: botName })
-      : foundationsError(opened.body, text('new.personaFailed'))
+    const note =
+      opened.body.ok === true
+        ? text('new.created', { name: botName })
+        : foundationsError(opened.body, text('new.personaFailed'))
     onCreated(sessionId, note, botName)
   }
 
@@ -68,20 +69,44 @@ export function NewSessionSheet({
       >
         <div className="setup-head">
           <h2 id="new-session-title">{text('new.title')}</h2>
-          <button type="button" className="setup-close" aria-label={text('new.close')} onClick={onClose}>×</button>
+          <button type="button" className="setup-close" aria-label={text('new.close')} onClick={onClose}>
+            ×
+          </button>
         </div>
         <p className="setup-lead">{text('new.lead')}</p>
         <label htmlFor="setup-name">{text('new.name')}</label>
-        <input id="setup-name" value={name} placeholder={text('new.namePlaceholder')} onChange={event => patchName(event.target.value)} />
+        <input
+          id="setup-name"
+          value={name}
+          placeholder={text('new.namePlaceholder')}
+          onChange={event => patchName(event.target.value)}
+        />
         <label htmlFor="setup-style">{text('new.style')}</label>
-        <input id="setup-style" value={style} placeholder={text('new.stylePlaceholder')} onChange={event => setStyle(event.target.value)} />
+        <input
+          id="setup-style"
+          value={style}
+          placeholder={text('new.stylePlaceholder')}
+          onChange={event => setStyle(event.target.value)}
+        />
         <label htmlFor="setup-task">{text('new.task')}</label>
-        <textarea id="setup-task" rows={3} value={task} placeholder={text('new.taskPlaceholder')} onChange={event => setTask(event.target.value)} />
+        <textarea
+          id="setup-task"
+          rows={3}
+          value={task}
+          placeholder={text('new.taskPlaceholder')}
+          onChange={event => setTask(event.target.value)}
+        />
         {error ? <p className="setup-error">{error}</p> : null}
         <div className="setup-actions">
-          <button type="button" onClick={() => setLocale(locale === 'en' ? 'zh' : 'en')}>{text('lang.switch')}</button>
-          <button type="button" onClick={onClose}>{text('new.cancel')}</button>
-          <button type="submit" className="primary" disabled={busy || name.trim() === ''}>{busy ? text('new.creating') : text('new.create')}</button>
+          <button type="button" onClick={() => setLocale(locale === 'en' ? 'zh' : 'en')}>
+            {text('lang.switch')}
+          </button>
+          <button type="button" onClick={onClose}>
+            {text('new.cancel')}
+          </button>
+          <button type="submit" className="primary" disabled={busy || name.trim() === ''}>
+            {busy ? text('new.creating') : text('new.create')}
+          </button>
         </div>
       </form>
     </div>
@@ -111,10 +136,14 @@ export function useSessionBasis(sessionId: string, revision: number): string {
       const fields = botFields(text)
       const head = [fields.name, fields.style, fields.task].filter(part => part !== '').join(' · ')
       const facts = Array.isArray(memory.body.facts) ? memory.body.facts : []
-      const active = facts.filter(item => item && typeof item === 'object' && (item as { status?: string }).status === 'active').length
-      setLine(active > 0 ? t('basis.facts', { head: head || 'BOT', count: String(active) }) : (head || 'BOT'))
+      const active = facts.filter(
+        item => item && typeof item === 'object' && (item as { status?: string }).status === 'active',
+      ).length
+      setLine(active > 0 ? t('basis.facts', { head: head || 'BOT', count: String(active) }) : head || 'BOT')
     })()
-    return () => { stop = true }
+    return () => {
+      stop = true
+    }
   }, [sessionId, revision, t])
   return line
 }

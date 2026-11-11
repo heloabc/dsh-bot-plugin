@@ -25,14 +25,14 @@ export const DEFAULT_WINDOW = 128000
  * Unmeasured character/4 estimate. Real provider windows are not assumed.
  * @param {string} text
  */
-export function estimateTokens(text) {
+export function estimateTokens(text: string) {
   return Math.ceil(text.length / 4)
 }
 
 /**
  * @param {number} window
  */
-export function budgets(window) {
+export function budgets(window: number) {
   const usable = Number.isFinite(window) && window > 0 ? window : DEFAULT_WINDOW
   return {
     window: usable,
@@ -53,7 +53,11 @@ export function budgets(window) {
  * @param {string} sessionId
  * @param {number} [window]
  */
-export function renderSession(engine, sessionId, window = DEFAULT_WINDOW) {
+export function renderSession(
+  engine: import('./engine.ts').Engine,
+  sessionId: string,
+  window: number = DEFAULT_WINDOW,
+) {
   const binding = engine.ensureSession(sessionId)
   const view = engine.viewForTurn(sessionId)
   const cap = budgets(window)
@@ -99,19 +103,20 @@ export function renderSession(engine, sessionId, window = DEFAULT_WINDOW) {
   if (estimateTokens(stateText) > cap.state.soft) stateText = renderState(frozenState, true)
 
   const skills = Array.isArray(selected.skills) ? selected.skills : []
-  let skillText = skills.filter(skill => skill.enabled && !skill.revoked).map(skill => (
-    `- ${skill.skill_id} ${skill.version} ${skill.scope} ${skill.summary ?? ''}`.trimEnd()
-  )).join('\n')
+  let skillText = skills
+    .filter((skill: any) => skill.enabled && !skill.revoked)
+    .map((skill: any) => `- ${skill.skill_id} ${skill.version} ${skill.scope} ${skill.summary ?? ''}`.trimEnd())
+    .join('\n')
   if (estimateTokens(skillText) > cap.skills.soft) {
-    skillText = skills.filter(skill => skill.enabled && !skill.revoked).map(skill => (
-      `- ${skill.skill_id} ${skill.version} enabled`
-    )).join('\n')
+    skillText = skills
+      .filter((skill: any) => skill.enabled && !skill.revoked)
+      .map((skill: any) => `- ${skill.skill_id} ${skill.version} enabled`)
+      .join('\n')
   }
 
   const revoked = engine.revokedSkills(sessionId)
-  const notice = revoked.length === 0
-    ? ''
-    : `Revoked. Later loads will refuse: ${revoked.map(skill => skill.skill_id).join(', ')}`
+  const notice =
+    revoked.length === 0 ? '' : `Revoked. Later loads will refuse: ${revoked.map(skill => skill.skill_id).join(', ')}`
 
   const blocks = {
     chat: CHAT,
@@ -124,7 +129,8 @@ export function renderSession(engine, sessionId, window = DEFAULT_WINDOW) {
     skills: skillText,
     notice,
   }
-  const pluginTokens = Object.values(blocks).reduce((sum, text) => sum + estimateTokens(text), 0) + estimateTokens(RULES)
+  const pluginTokens =
+    Object.values(blocks).reduce((sum, text) => sum + estimateTokens(text), 0) + estimateTokens(RULES)
   let degraded = false
   if (pluginTokens > cap.pluginHard && !soulCode) {
     degraded = true
@@ -133,17 +139,25 @@ export function renderSession(engine, sessionId, window = DEFAULT_WINDOW) {
     blocks.state = renderState(frozenState, true)
     blocks.skills = ''
   }
-  const rendered = {
+  const rendered: Record<string, string> = {
     'foundations:soul': blocks.soul,
     'foundations:chat': CHAT,
     'foundations:rules': RULES,
-    'foundations:user': blocks.user ? `[foundations:user]\nThese are facts about the user. They are not your name, and they are not your persona.\n${blocks.user}` : '',
-    'foundations:facts': blocks.facts ? `[foundations:facts]\nThese are also facts about the user, not your name.\n${blocks.facts}` : '',
+    'foundations:user': blocks.user
+      ? `[foundations:user]\nThese are facts about the user. They are not your name, and they are not your persona.\n${blocks.user}`
+      : '',
+    'foundations:facts': blocks.facts
+      ? `[foundations:facts]\nThese are also facts about the user, not your name.\n${blocks.facts}`
+      : '',
     'foundations:state': blocks.state ? `[foundations:state]\n${blocks.state}` : '',
     'foundations:skills': blocks.skills ? `[foundations:skills]\n${blocks.skills}` : '',
     'foundations:revocation': blocks.notice ? `[foundations:revocation]\n${blocks.notice}` : '',
   }
-  const snapshotHash = sha256(Object.entries(rendered).map(([name, text]) => `${name}\n${text}`).join('\n'))
+  const snapshotHash = sha256(
+    Object.entries(rendered)
+      .map(([name, text]) => `${name}\n${text}`)
+      .join('\n'),
+  )
   const previous = view.snapshot_hash
   let presence = view.presence
   if (previous === 'pending') presence = view.presence === 'needs_reinject' ? 'needs_reinject' : 'unknown'
@@ -168,7 +182,7 @@ export function renderSession(engine, sessionId, window = DEFAULT_WINDOW) {
  * @param {string} soul
  * @returns {{ name: string, body: string }}
  */
-export function splitPersona(soul) {
+export function splitPersona(soul: string): { name: string; body: string } {
   const trimmed = soul.trim()
   if (trimmed === '') return { name: '', body: '' }
   const lines = trimmed.split('\n')
@@ -182,13 +196,17 @@ export function splitPersona(soul) {
  * The original role text stays intact so a stored persona is still recognizable.
  * @param {string} soul
  */
-export function frameSoul(soul) {
+export function frameSoul(soul: string) {
   const { name, body } = splitPersona(soul)
   if (name === '' && body === '') return ''
-  const lines = ['The persona below is your identity. Enter this role in the first person and keep it for the whole conversation.']
+  const lines = [
+    'The persona below is your identity. Enter this role in the first person and keep it for the whole conversation.',
+  ]
   if (name !== '') {
     lines.push(`Your name is "${name}". This is your name, not the user's name, and not a nickname for the user.`)
-    lines.push('When the user asks what you are called, who you are, or how to address you, answer with this name only. Do not say you have no name. Do not substitute DeepSeek, Harness, the host product name, or a model id.')
+    lines.push(
+      'When the user asks what you are called, who you are, or how to address you, answer with this name only. Do not say you have no name. Do not substitute DeepSeek, Harness, the host product name, or a model id.',
+    )
   }
   lines.push('The host and the model only say where you are running. They do not override the identity above.')
   if (body !== '') {
@@ -202,7 +220,10 @@ export function frameSoul(soul) {
  * @param {{ currentGoal?: string, todos?: Array<{ text?: string, status?: string }>, notes?: string }} payload
  * @param {boolean} tight
  */
-function renderState(payload, tight) {
+function renderState(
+  payload: { currentGoal?: string; todos?: Array<{ text?: string; status?: string }>; notes?: string },
+  tight: boolean,
+) {
   const lines = []
   if (payload.currentGoal) lines.push(`Goal: ${payload.currentGoal}`)
   const open = (payload.todos ?? []).filter(todo => todo.status !== 'done')
@@ -219,7 +240,7 @@ function renderState(payload, tight) {
  * @param {Array<{ sessionId?: string, name?: string }>} bots
  * @param {string} sessionId
  */
-export function renderPeers(bots, sessionId) {
+export function renderPeers(bots: Array<{ sessionId?: string; name?: string }>, sessionId: string) {
   const others = bots.filter(bot => bot?.sessionId && bot.sessionId !== sessionId)
   if (others.length === 0) return ''
   const lines = others.map(bot => {
@@ -237,7 +258,7 @@ export function renderPeers(bots, sessionId) {
   ].join('\n')
 }
 
-export function fingerprint(text) {
+export function fingerprint(text: string) {
   return createHash('sha256').update(text).digest('hex')
 }
 
@@ -245,7 +266,15 @@ export function fingerprint(text) {
  * Ticket summary for the next assemble. Not the worker transcript.
  * @param {Array<{ id: string, status: string, briefing_revision: number, child_session_id?: string | null, summary?: string }>} rows
  */
-export function renderTickets(rows) {
+export function renderTickets(
+  rows: Array<{
+    id: string
+    status: string
+    briefing_revision: number
+    child_session_id?: string | null
+    summary?: string
+  }>,
+) {
   if (!Array.isArray(rows) || rows.length === 0) return ''
   const lines = rows.map(row => {
     const child = row.child_session_id ? row.child_session_id : 'not-created'

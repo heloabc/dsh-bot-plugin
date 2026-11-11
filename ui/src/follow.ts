@@ -1,6 +1,13 @@
 import { parseBotMail } from './bot-message.ts'
 import { isTicketNotice, parseBriefing } from './work.ts'
-import { type LiveBlock, type RetryAttempt, type Segment, type ThreadState, type ToolSegment, type TurnFailure } from './types.ts'
+import {
+  type LiveBlock,
+  type RetryAttempt,
+  type Segment,
+  type ThreadState,
+  type ToolSegment,
+  type TurnFailure,
+} from './types.ts'
 
 interface ContentBlock {
   type?: string
@@ -46,7 +53,11 @@ function messageBody(data: Record<string, unknown>): MessageBody | null {
 function asString(value: unknown): string {
   if (typeof value === 'string') return value
   if (value && typeof value === 'object') {
-    try { return JSON.stringify(value) } catch { return '' }
+    try {
+      return JSON.stringify(value)
+    } catch {
+      return ''
+    }
   }
   return ''
 }
@@ -57,14 +68,26 @@ function numberOf(value: unknown): number | undefined {
 
 function failureOf(reason: unknown): TurnFailure | null {
   if (!reason || typeof reason !== 'object') return null
-  const record = reason as { kind?: string; error?: { message?: string; code?: string }; reason?: { kind?: string; reason?: string } }
+  const record = reason as {
+    kind?: string
+    error?: { message?: string; code?: string }
+    reason?: { kind?: string; reason?: string }
+  }
   if (record.kind === 'error') {
-    const message = typeof record.error?.message === 'string' && record.error.message !== '' ? record.error.message : 'This turn failed'
+    const message =
+      typeof record.error?.message === 'string' && record.error.message !== ''
+        ? record.error.message
+        : 'This turn failed'
     const code = typeof record.error?.code === 'string' ? record.error.code : undefined
     return { message, ...(code ? { code } : {}) }
   }
-  if (record.kind === 'interrupted') return { message: 'The DSH process exited before this turn finished.', code: 'INTERRUPTED' }
-  if (record.kind === 'aborted' && record.reason?.kind === 'hook' && record.reason.reason === 'deepseek-account/signed-out') {
+  if (record.kind === 'interrupted')
+    return { message: 'The DSH process exited before this turn finished.', code: 'INTERRUPTED' }
+  if (
+    record.kind === 'aborted' &&
+    record.reason?.kind === 'hook' &&
+    record.reason.reason === 'deepseek-account/signed-out'
+  ) {
     return { message: 'Stopped because you signed out of DeepSeek.', code: 'ACCOUNT_SIGNED_OUT' }
   }
   return null
@@ -105,12 +128,20 @@ function sortSegments(segments: Segment[]): Segment[] {
 }
 
 function addUser(segments: Segment[], segment: Segment & { kind: 'user' }): Segment[] {
-  const index = segments.findIndex(item => item.kind === 'user' && item.optimistic && item.text.trim() === segment.text.trim())
+  const index = segments.findIndex(
+    item => item.kind === 'user' && item.optimistic && item.text.trim() === segment.text.trim(),
+  )
   if (index >= 0) {
     const next = segments.slice()
     const pending = next[index]
     if (!pending || pending.kind !== 'user') return segments
-    next[index] = { ...pending, optimistic: false, time: segment.time ?? pending.time, seq: segment.seq, turn: segment.turn }
+    next[index] = {
+      ...pending,
+      optimistic: false,
+      time: segment.time ?? pending.time,
+      seq: segment.seq,
+      turn: segment.turn,
+    }
     return next
   }
   return sortSegments([...segments, segment])
@@ -126,11 +157,17 @@ export function toolDetail(name: string, args: string): string {
     const path = ['path', 'file_path', 'file', 'target_file', 'target']
       .map(key => parsed[key])
       .find(value => typeof value === 'string')
-    const query = typeof parsed.query === 'string' ? parsed.query
-      : typeof parsed.pattern === 'string' ? parsed.pattern
-        : typeof parsed.prompt === 'string' ? parsed.prompt
-          : ''
-    return (command || (typeof path === 'string' ? path : '') || query || description || name).replace(/\s+/g, ' ').trim()
+    const query =
+      typeof parsed.query === 'string'
+        ? parsed.query
+        : typeof parsed.pattern === 'string'
+          ? parsed.pattern
+          : typeof parsed.prompt === 'string'
+            ? parsed.prompt
+            : ''
+    return (command || (typeof path === 'string' ? path : '') || query || description || name)
+      .replace(/\s+/g, ' ')
+      .trim()
   } catch {
     return raw.replace(/\s+/g, ' ').trim()
   }
@@ -143,7 +180,8 @@ function toolKind(name: string): string {
   if (value.includes('read') || value === 'cat') return 'read'
   if (value.includes('edit') || value.includes('patch') || value.includes('replace')) return 'edit'
   if (value.includes('write')) return 'write'
-  if (value.includes('grep') || value.includes('glob') || value.includes('search') || value.includes('find')) return 'search'
+  if (value.includes('grep') || value.includes('glob') || value.includes('search') || value.includes('find'))
+    return 'search'
   if (value.includes('webfetch') || value.includes('fetch') || value.includes('browse')) return 'webFetch'
   if (value.includes('web')) return 'webSearch'
   if (value.includes('plan')) return 'plan'
@@ -200,7 +238,10 @@ const TOOL_TITLES: Record<string, string> = {
 export function toolTitle(tool: ToolSegment): string {
   const kind = toolKind(tool.name)
   if (tool.running) return RUNNING[kind] ?? 'Calling tools'
-  return TOOL_TITLES[tool.name.toLowerCase()] ?? (tool.name && tool.name !== 'tool' ? tool.name : DONE[kind] ?? 'Called tools')
+  return (
+    TOOL_TITLES[tool.name.toLowerCase()] ??
+    (tool.name && tool.name !== 'tool' ? tool.name : (DONE[kind] ?? 'Called tools'))
+  )
 }
 
 export function processHeading(segments: readonly Segment[], running = false): string {
@@ -210,8 +251,22 @@ export function processHeading(segments: readonly Segment[], running = false): s
   }
   if (kinds.size === 0) kinds.add('thinking')
   const table = running ? RUNNING : DONE
-  const order = ['commands', 'write', 'edit', 'read', 'readImage', 'search', 'webSearch', 'webFetch', 'tools', 'thinking']
-  const labels = order.filter(kind => kinds.has(kind)).slice(0, 3).map(kind => table[kind] ?? kind)
+  const order = [
+    'commands',
+    'write',
+    'edit',
+    'read',
+    'readImage',
+    'search',
+    'webSearch',
+    'webFetch',
+    'tools',
+    'thinking',
+  ]
+  const labels = order
+    .filter(kind => kinds.has(kind))
+    .slice(0, 3)
+    .map(kind => table[kind] ?? kind)
   const first = labels[0]
   if (!first) return 'Analysis completed'
   if (labels.length === 1) return first
@@ -281,17 +336,26 @@ export function fileChange(tool: ToolSegment): FileChange | null {
     return change(path, content.length, lines, lines.length, 0)
   }
   if (name === 'edit' || name === 'apply_patch' || name === 'str_replace_editor') {
-    const oldText = typeof parsed.old_string === 'string' ? parsed.old_string
-      : typeof parsed.old_str === 'string' ? parsed.old_str
-        : null
-    const newText = typeof parsed.new_string === 'string' ? parsed.new_string
-      : typeof parsed.new_str === 'string' ? parsed.new_str
-        : typeof parsed.content === 'string' ? parsed.content
-          : typeof parsed.file_text === 'string' ? parsed.file_text
-            : ''
-    const lines = oldText == null || oldText === ''
-      ? contentLines(newText).map(text => ({ kind: 'add' as const, text }))
-      : lineDiff(oldText, newText)
+    const oldText =
+      typeof parsed.old_string === 'string'
+        ? parsed.old_string
+        : typeof parsed.old_str === 'string'
+          ? parsed.old_str
+          : null
+    const newText =
+      typeof parsed.new_string === 'string'
+        ? parsed.new_string
+        : typeof parsed.new_str === 'string'
+          ? parsed.new_str
+          : typeof parsed.content === 'string'
+            ? parsed.content
+            : typeof parsed.file_text === 'string'
+              ? parsed.file_text
+              : ''
+    const lines =
+      oldText == null || oldText === ''
+        ? contentLines(newText).map(text => ({ kind: 'add' as const, text }))
+        : lineDiff(oldText, newText)
     const added = lines.filter(line => line.kind === 'add').length
     const removed = lines.filter(line => line.kind === 'del').length
     return change(path, newText.length, lines, added, removed)
@@ -376,15 +440,31 @@ function lineDiff(oldText: string, newText: string): DiffLine[] {
 function languageFor(name: string): string {
   const ext = name.split('.').pop()?.toLowerCase() ?? ''
   const languages: Record<string, string> = {
-    py: 'python', ts: 'typescript', tsx: 'tsx', js: 'javascript', jsx: 'jsx',
-    md: 'markdown', css: 'css', html: 'html', json: 'json', sh: 'bash',
-    yml: 'yaml', yaml: 'yaml', go: 'go', rs: 'rust', rb: 'ruby',
+    py: 'python',
+    ts: 'typescript',
+    tsx: 'tsx',
+    js: 'javascript',
+    jsx: 'jsx',
+    md: 'markdown',
+    css: 'css',
+    html: 'html',
+    json: 'json',
+    sh: 'bash',
+    yml: 'yaml',
+    yaml: 'yaml',
+    go: 'go',
+    rs: 'rust',
+    rb: 'ruby',
   }
   return languages[ext] ?? ''
 }
 
 export function thinkPreview(text: string): string {
-  const line = text.split('\n').map(item => item.trim()).find(Boolean) ?? ''
+  const line =
+    text
+      .split('\n')
+      .map(item => item.trim())
+      .find(Boolean) ?? ''
   return line.replaceAll('**', '')
 }
 
@@ -428,7 +508,14 @@ function upsertTool(segments: Segment[], tool: ToolSegment): Segment[] {
   return sortSegments([...segments, tool])
 }
 
-function projectLive(state: ThreadState, key: string, blocks: LiveBlock[], seq: number, turn?: number, step?: number): Segment[] {
+function projectLive(
+  state: ThreadState,
+  key: string,
+  blocks: LiveBlock[],
+  seq: number,
+  turn?: number,
+  step?: number,
+): Segment[] {
   const prefix = `live:${key}:`
   const prior = state.segments.filter(item => item.id.startsWith(prefix))
   let kept = state.segments.filter(item => !item.id.startsWith(prefix))
@@ -436,12 +523,30 @@ function projectLive(state: ThreadState, key: string, blocks: LiveBlock[], seq: 
   for (const block of blocks) {
     const part = seq + block.index / 100
     if (block.kind === 'reasoning' && block.text.trim()) {
-      added.push({ kind: 'think', id: `${prefix}think:${block.index}`, text: block.text, running: true, seq: part, turn, step })
+      added.push({
+        kind: 'think',
+        id: `${prefix}think:${block.index}`,
+        text: block.text,
+        running: true,
+        seq: part,
+        turn,
+        step,
+      })
     } else if (block.kind === 'text' && block.text) {
-      added.push({ kind: 'assistant', id: `${prefix}text:${block.index}`, text: block.text, streaming: true, seq: part, turn, step })
+      added.push({
+        kind: 'assistant',
+        id: `${prefix}text:${block.index}`,
+        text: block.text,
+        streaming: true,
+        seq: part,
+        turn,
+        step,
+      })
     } else if (block.kind === 'tool-call' && (block.name || block.args || block.id)) {
       const callId = block.id || `${prefix}tool:${block.index}`
-      const existing = [...kept, ...prior].find((item): item is ToolSegment => item.kind === 'tool' && item.callId === callId)
+      const existing = [...kept, ...prior].find(
+        (item): item is ToolSegment => item.kind === 'tool' && item.callId === callId,
+      )
       const durable = kept.findIndex(item => item.kind === 'tool' && item.callId === callId)
       if (durable >= 0) {
         const previous = kept[durable]
@@ -457,10 +562,17 @@ function projectLive(state: ThreadState, key: string, blocks: LiveBlock[], seq: 
         }
       } else {
         added.push({
-          kind: 'tool', id: `${prefix}tool:${block.index}`, callId, name: block.name || existing?.name || 'tool',
+          kind: 'tool',
+          id: `${prefix}tool:${block.index}`,
+          callId,
+          name: block.name || existing?.name || 'tool',
           args: block.args || existing?.args || '',
-          result: existing?.result ?? '', error: existing?.error ?? false,
-          running: existing?.result ? false : true, seq: existing?.seq ?? part, turn, step,
+          result: existing?.result ?? '',
+          error: existing?.error ?? false,
+          running: existing?.result ? false : true,
+          seq: existing?.seq ?? part,
+          turn,
+          step,
         })
       }
     }
@@ -472,23 +584,29 @@ function ensureBlock(blocks: LiveBlock[], index: number, kind: LiveBlock['kind']
   const found = blocks.find(block => block.index === index)
   if (found) {
     if (found.kind === kind) return blocks
-    return blocks.map(block => block.index === index ? { ...block, kind } : block)
+    return blocks.map(block => (block.index === index ? { ...block, kind } : block))
   }
   return [...blocks, { index, kind, text: '', id: '', name: '', args: '' }].sort((a, b) => a.index - b.index)
 }
 
-function patchBlock(blocks: LiveBlock[], index: number, kind: LiveBlock['kind'], patch: (block: LiveBlock) => LiveBlock): LiveBlock[] {
+function patchBlock(
+  blocks: LiveBlock[],
+  index: number,
+  kind: LiveBlock['kind'],
+  patch: (block: LiveBlock) => LiveBlock,
+): LiveBlock[] {
   const next = ensureBlock(blocks, index, kind)
-  return next.map(block => block.index === index ? patch({ ...block, kind }) : block)
+  return next.map(block => (block.index === index ? patch({ ...block, kind }) : block))
 }
 
 function applyChunk(blocks: LiveBlock[], chunk: Record<string, unknown>): LiveBlock[] {
   const index = numberOf(chunk.index) ?? 0
   const type = typeof chunk.type === 'string' ? chunk.type : ''
   if (type === 'block-start') {
-    const blockType = chunk.blockType === 'reasoning' || chunk.blockType === 'tool-call' || chunk.blockType === 'text'
-      ? chunk.blockType
-      : 'text'
+    const blockType =
+      chunk.blockType === 'reasoning' || chunk.blockType === 'tool-call' || chunk.blockType === 'text'
+        ? chunk.blockType
+        : 'text'
     return ensureBlock(blocks, index, blockType)
   }
   if (type === 'text-delta' || type === 'text-chunks') {
@@ -500,7 +618,8 @@ function applyChunk(blocks: LiveBlock[], chunk: Record<string, unknown>): LiveBl
     return patchBlock(blocks, index, 'reasoning', block => ({ ...block, text: block.text + extra }))
   }
   if (type === 'tool-call-delta' || type === 'tool-call-chunks') {
-    const extra = typeof chunk.argumentsDelta === 'string' ? chunk.argumentsDelta : asString(chunk.args ?? chunk.arguments)
+    const extra =
+      typeof chunk.argumentsDelta === 'string' ? chunk.argumentsDelta : asString(chunk.args ?? chunk.arguments)
     return patchBlock(blocks, index, 'tool-call', block => ({
       ...block,
       id: typeof chunk.id === 'string' && chunk.id ? chunk.id : block.id,
@@ -557,9 +676,9 @@ function applyAssistant(state: ThreadState, event: SessionEvent): ThreadState {
   const live = { ...state.live }
   delete live[key]
   let segments = state.segments.filter(item => !item.id.startsWith(`live:${key}:`))
-  segments = segments.filter(item => !(
-    (item.kind === 'think' || item.kind === 'assistant') && item.turn === turn && item.step === step
-  ))
+  segments = segments.filter(
+    item => !((item.kind === 'think' || item.kind === 'assistant') && item.turn === turn && item.step === step),
+  )
   const base = event.seq ?? 0
   content.forEach((block, index) => {
     const seq = base + index / 100
@@ -567,8 +686,15 @@ function applyAssistant(state: ThreadState, event: SessionEvent): ThreadState {
       segments.push({ kind: 'think', id: `think:${key}:${index}`, text: block.text, running: false, seq, turn, step })
     } else if (block.type === 'text' && block.text) {
       segments.push({
-        kind: 'assistant', id: `text:${key}:${index}`, text: block.text, streaming: false,
-        time: event.time, seq, turn, step, messageId: message?.id,
+        kind: 'assistant',
+        id: `text:${key}:${index}`,
+        text: block.text,
+        streaming: false,
+        time: event.time,
+        seq,
+        turn,
+        step,
+        messageId: message?.id,
       })
     } else if (block.type === 'tool-call') {
       const callId = block.id || `call:${key}:${index}`
@@ -720,7 +846,14 @@ function expandStream(stream: unknown): Array<{ time: number; chunk: Record<stri
   return out
 }
 
-function pushChunk(state: ThreadState, turn: number, step: number, time: number, chunk: Record<string, unknown>, seq: number): ThreadState {
+function pushChunk(
+  state: ThreadState,
+  turn: number,
+  step: number,
+  time: number,
+  chunk: Record<string, unknown>,
+  seq: number,
+): ThreadState {
   return applyLive(state, { type: 'assistant/live-chunk', seq, time, data: { turn, step, chunk } })
 }
 
@@ -733,7 +866,14 @@ function clearStepLive(state: ThreadState, turn: number, step: number, settled =
     live,
     segments: state.segments.filter(item => {
       if (item.id.startsWith(`live:${key}:`)) return false
-      if (settled && item.kind !== 'user' && item.turn === turn && item.step === step && (item.kind === 'assistant' || item.kind === 'think')) return false
+      if (
+        settled &&
+        item.kind !== 'user' &&
+        item.turn === turn &&
+        item.step === step &&
+        (item.kind === 'assistant' || item.kind === 'think')
+      )
+        return false
       return true
     }),
   }
@@ -829,7 +969,14 @@ function applyStreamFrame(state: ThreadState, frame: Record<string, unknown>): T
     if (index !== attempt.nextIndex) return { ...releasePending(state), streamRevision: revision }
     const key = stepKey(attempt.turn, attempt.step)
     const seq = state.live[key]?.seq || streamingSeq(state, attempt.startedAfterSeq)
-    const next = pushChunk(state, attempt.turn, attempt.step, numberOf(frame.time) ?? 0, chunk as Record<string, unknown>, seq)
+    const next = pushChunk(
+      state,
+      attempt.turn,
+      attempt.step,
+      numberOf(frame.time) ?? 0,
+      chunk as Record<string, unknown>,
+      seq,
+    )
     return {
       ...next,
       streamRevision: revision,
@@ -837,7 +984,8 @@ function applyStreamFrame(state: ThreadState, frame: Record<string, unknown>): T
     }
   }
   if (type === 'end') {
-    const outcome = frame.outcome && typeof frame.outcome === 'object' ? frame.outcome as { kind?: string; eventType?: string } : {}
+    const outcome =
+      frame.outcome && typeof frame.outcome === 'object' ? (frame.outcome as { kind?: string; eventType?: string }) : {}
     const stamped = { ...state, streamRevision: revision }
     if (outcome.kind === 'abandoned') {
       const cleared = clearStepLive(stamped, attempt.turn, attempt.step)
@@ -872,14 +1020,16 @@ function settleTurn(state: ThreadState, turn: number | null): ThreadState {
 
 function applySnapshot(state: ThreadState, value: Record<string, unknown>): ThreadState {
   const projections = value.projections
-  const values = projections && typeof projections === 'object'
-    ? (projections as { values?: Record<string, unknown> }).values ?? {}
-    : {}
+  const values =
+    projections && typeof projections === 'object'
+      ? ((projections as { values?: Record<string, unknown> }).values ?? {})
+      : {}
   const next = { ...state }
   if (typeof values.title === 'string') next.title = values.title
-  const lastUsed = values.modelSelection && typeof values.modelSelection === 'object'
-    ? (values.modelSelection as { lastUsed?: { model?: string } }).lastUsed
-    : undefined
+  const lastUsed =
+    values.modelSelection && typeof values.modelSelection === 'object'
+      ? (values.modelSelection as { lastUsed?: { model?: string } }).lastUsed
+      : undefined
   if (lastUsed?.model) next.model = lastUsed.model
   const permissions = values.permissions
   if (permissions && typeof permissions === 'object') {
@@ -941,14 +1091,23 @@ function reduceFrame(state: ThreadState, frame: unknown, seen: Set<number>): Thr
       }
       const failure = turn == null ? null : failureOf(data.reason)
       const failures = failure == null || turn == null ? next.failures : { ...next.failures, [turn]: failure }
-      const endKind = data.reason && typeof data.reason === 'object' && typeof (data.reason as { kind?: unknown }).kind === 'string'
-        ? (data.reason as { kind: string }).kind
-        : ''
-      const turnEnds = turn == null
-        ? (next.turnEnds ?? {})
-        : { ...(next.turnEnds ?? {}), [turn]: endKind || next.turnEnds?.[turn] || 'ended' }
+      const endKind =
+        data.reason && typeof data.reason === 'object' && typeof (data.reason as { kind?: unknown }).kind === 'string'
+          ? (data.reason as { kind: string }).kind
+          : ''
+      const turnEnds =
+        turn == null
+          ? (next.turnEnds ?? {})
+          : { ...(next.turnEnds ?? {}), [turn]: endKind || next.turnEnds?.[turn] || 'ended' }
       next = settleTurn(next, turn)
-      next = { ...next, drafting: next.turn === turn ? false : next.drafting, completed, failures, turnEnds, turnStartedAt: next.turn === turn ? null : next.turnStartedAt }
+      next = {
+        ...next,
+        drafting: next.turn === turn ? false : next.drafting,
+        completed,
+        failures,
+        turnEnds,
+        turnStartedAt: next.turn === turn ? null : next.turnStartedAt,
+      }
       continue
     }
     if (event.type === 'llm/retry') {
@@ -956,7 +1115,8 @@ function reduceFrame(state: ThreadState, frame: unknown, seen: Set<number>): Thr
       const retryId = typeof data.retryId === 'string' ? data.retryId : ''
       const retry = numberOf(data.retry)
       if (turn == null || retryId === '' || retry == null) continue
-      const failure = data.failure && typeof data.failure === 'object' ? data.failure as { message?: string; code?: string } : {}
+      const failure =
+        data.failure && typeof data.failure === 'object' ? (data.failure as { message?: string; code?: string }) : {}
       const attempt: RetryAttempt = {
         retryId,
         retry,
@@ -967,7 +1127,13 @@ function reduceFrame(state: ThreadState, frame: unknown, seen: Set<number>): Thr
         state: 'scheduled',
       }
       const prior = next.retries[turn] ?? []
-      next = { ...next, retries: { ...next.retries, [turn]: [...prior.filter(item => item.retryId !== retryId || item.retry !== retry), attempt] } }
+      next = {
+        ...next,
+        retries: {
+          ...next.retries,
+          [turn]: [...prior.filter(item => item.retryId !== retryId || item.retry !== retry), attempt],
+        },
+      }
       continue
     }
     if (event.type === 'llm/retry-started') {
@@ -981,7 +1147,9 @@ function reduceFrame(state: ThreadState, frame: unknown, seen: Set<number>): Thr
         ...next,
         retries: {
           ...next.retries,
-          [turn]: prior.map(item => item.retryId === retryId && item.retry === retry ? { ...item, state: 'started' } : item),
+          [turn]: prior.map(item =>
+            item.retryId === retryId && item.retry === retry ? { ...item, state: 'started' } : item,
+          ),
         },
       }
       continue
@@ -1027,7 +1195,8 @@ function reduceFrame(state: ThreadState, frame: unknown, seen: Set<number>): Thr
   }
   if (payload?.type === 'assistant-stream') {
     const streamFrame = payload.frame
-    if (streamFrame && typeof streamFrame === 'object') next = applyStreamFrame(next, streamFrame as Record<string, unknown>)
+    if (streamFrame && typeof streamFrame === 'object')
+      next = applyStreamFrame(next, streamFrame as Record<string, unknown>)
   }
   return next
 }
@@ -1043,12 +1212,21 @@ export function previewOf(segments: Segment[]): string {
     if (item.kind === 'user' && isTicketNotice(item.text)) continue
     const mail = item.kind === 'user' ? parseBotMail(item.text) : null
     const briefing = item.kind === 'user' ? parseBriefing(item.text) : null
-    const text = mail ? mail.body
-      : briefing?.body ? briefing.body
-      : item.kind === 'user' || item.kind === 'assistant' ? item.text
-      : item.kind === 'tool' ? (item.result || toolDetail(item.name, item.args))
-        : thinkPreview(item.text)
-    const clean = text.replace(/```[\s\S]*?```/g, ' ').replace(/^#{1,6}\s+/gm, '').replace(/[|*_`>]/g, ' ').replace(/\s+/g, ' ').trim()
+    const text = mail
+      ? mail.body
+      : briefing?.body
+        ? briefing.body
+        : item.kind === 'user' || item.kind === 'assistant'
+          ? item.text
+          : item.kind === 'tool'
+            ? item.result || toolDetail(item.name, item.args)
+            : thinkPreview(item.text)
+    const clean = text
+      .replace(/```[\s\S]*?```/g, ' ')
+      .replace(/^#{1,6}\s+/gm, '')
+      .replace(/[|*_`>]/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim()
     if (clean) return clean.slice(0, 80)
   }
   return ''

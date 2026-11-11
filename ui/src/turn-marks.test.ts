@@ -10,10 +10,16 @@ test('a user line and its turn are two ticks, and the turn stays one tick', () =
     { id: 'answer', kind: 'assistant', turn: 3 },
     { id: 'u2', kind: 'user', turn: 4 },
   ])
-  assert.deepEqual(marks.map(mark => mark.id), ['u1', 'turn:3', 'u2'])
+  assert.deepEqual(
+    marks.map(mark => mark.id),
+    ['u1', 'turn:3', 'u2'],
+  )
 })
 
 test('an assistant turn with no user line still gets a tick', () => {
   const marks = railMarks([{ id: 'answer', kind: 'assistant', turn: 1 }])
-  assert.deepEqual(marks.map(mark => mark.id), ['turn:1'])
+  assert.deepEqual(
+    marks.map(mark => mark.id),
+    ['turn:1'],
+  )
 })

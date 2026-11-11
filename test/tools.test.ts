@@ -23,13 +23,17 @@ test('fork binding does not copy the parent rows', () => {
   const store = openStore(dir)
   const engine = createEngine(store)
   engine.ensureSession('session-parent')
-  store.db.prepare(`
+  store.db
+    .prepare(`
     INSERT INTO facts (
       session_id, content, status, source_type, revision, priority, created_at, updated_at
     ) VALUES ('session-parent', 'a parent-session fact', 'active', 'explicit_tool', 1, 100, ?, ?)
-  `).run(new Date().toISOString(), new Date().toISOString())
+  `)
+    .run(new Date().toISOString(), new Date().toISOString())
   engine.ensureSession('session-child', { parentSessionId: 'session-parent', seeded: true })
-  const childFacts = store.db.prepare(`SELECT count(*) AS n FROM facts WHERE session_id = 'session-child'`).get() as { n: number }
+  const childFacts = store.db.prepare(`SELECT count(*) AS n FROM facts WHERE session_id = 'session-child'`).get() as {
+    n: number
+  }
   assert.equal(childFacts.n, 0)
   const binding = engine.binding('session-child')
   if (binding === null) throw new Error('session-child has no binding')

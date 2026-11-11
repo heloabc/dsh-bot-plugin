@@ -4,11 +4,7 @@ import { useLayoutEffect, useState, type ReactNode, type TransitionEvent } from 
  * Height fold. The grid row animates between 0fr and 1fr.
  * Content mounts before the expand frame and unmounts after the collapse ends.
  */
-export function Collapse({ open, children, className }: {
-  open: boolean
-  children: ReactNode
-  className?: string
-}) {
+export function Collapse({ open, children, className }: { open: boolean; children: ReactNode; className?: string }) {
   const [mounted, setMounted] = useState(open)
   const [expanded, setExpanded] = useState(open)
 

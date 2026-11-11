@@ -2,6 +2,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { sha256 } from './fs-safe.ts'
+import type { SqlDatabase } from './store.ts'
 
 export const ACTIVE_TICKET = Object.freeze(['accepted', 'enqueued', 'started', 'needs_user'])
 const TERMINAL_KIND = new Set(['question', 'result', 'failure'])
@@ -14,21 +15,21 @@ const OPEN_NOTICE_FLUSH = new Set(['intent', 'flushing', 'ambiguous'])
  * @param {string} root
  * @param {() => Date} [now]
  */
-export function createTicketBook(db, root, now = () => new Date()) {
+export function createTicketBook(db: SqlDatabase, root: string, now: () => Date = () => new Date()) {
   const iso = () => now().toISOString()
 
   return {
     iso,
     countActive,
     countGlobal,
-    ticket: (id) => row('SELECT * FROM work_tickets WHERE id = ?', id),
-    attempt: (id) => row('SELECT * FROM work_attempts WHERE id = ?', id),
+    ticket: (id: string) => row('SELECT * FROM work_tickets WHERE id = ?', id),
+    attempt: (id: string) => row('SELECT * FROM work_attempts WHERE id = ?', id),
     byIdempotency,
     attemptForChild,
-    input: (id) => row('SELECT * FROM work_inputs WHERE id = ?', id),
+    input: (id: string) => row('SELECT * FROM work_inputs WHERE id = ?', id),
     inputByNative,
     currentInput,
-    event: (id) => row('SELECT * FROM work_events WHERE event_id = ?', id),
+    event: (id: string) => row('SELECT * FROM work_events WHERE event_id = ?', id),
     writeBriefing,
     readBriefing,
     insertAccepted,
@@ -80,58 +81,70 @@ export function createTicketBook(db, root, now = () => new Date()) {
    * @param {string} sql
    * @param {unknown} arg
    */
-  function row(sql, arg) {
+  function row(sql: string, arg: unknown) {
     return db.prepare(sql).get(arg) ?? null
   }
 
   /**
    * @param {string} owner
    */
-  function countActive(owner) {
-    return db.prepare(`
+  function countActive(owner: string) {
+    return db
+      .prepare(`
       SELECT COUNT(*) AS n FROM work_tickets
       WHERE owner_session_id = ? AND status IN ('accepted','enqueued','started','needs_user')
-    `).get(owner).n
+    `)
+      .get(owner).n
   }
 
   function countGlobal() {
-    return db.prepare(`
+    return db
+      .prepare(`
       SELECT COUNT(*) AS n FROM work_tickets
       WHERE status IN ('accepted','enqueued','started','needs_user')
-    `).get().n
+    `)
+      .get().n
   }
 
   /**
    * @param {string} owner
    * @param {string | null} key
    */
-  function byIdempotency(owner, key) {
+  function byIdempotency(owner: string, key: string | null) {
     if (key == null) return null
-    return db.prepare(`
+    return (
+      db
+        .prepare(`
       SELECT * FROM work_tickets WHERE owner_session_id = ? AND idempotency_key = ?
-    `).get(owner, key) ?? null
+    `)
+        .get(owner, key) ?? null
+    )
   }
 
   /**
    * @param {string} sessionId
    */
-  function attemptForChild(sessionId) {
-    return db.prepare(`
+  function attemptForChild(sessionId: string) {
+    return (
+      db
+        .prepare(`
       SELECT * FROM work_attempts WHERE child_session_id = ? ORDER BY fencing_token DESC LIMIT 1
-    `).get(sessionId) ?? null
+    `)
+        .get(sessionId) ?? null
+    )
   }
 
   /**
    * @param {string} nativeId
    */
-  function inputByNative(nativeId) {
+  function inputByNative(nativeId: string) {
     return db.prepare('SELECT * FROM work_inputs WHERE native_message_id = ?').get(nativeId) ?? null
   }
 
   /**
    * @param {{ current_input_id?: string | null }} attempt
    */
-  function currentInput(attempt) {
+  function currentInput(attempt: { current_input_id?: string | null }) {
     if (!attempt?.current_input_id) return null
     return row('SELECT * FROM work_inputs WHERE id = ?', attempt.current_input_id)
   }
@@ -139,7 +152,7 @@ export function createTicketBook(db, root, now = () => new Date()) {
   /**
    * @param {string} text
    */
-  function writeBriefing(text) {
+  function writeBriefing(text: string) {
     const hash = sha256(text)
     const dir = join(root, 'blobs', 'work')
     mkdirSync(dir, { recursive: true, mode: 0o700 })
@@ -151,7 +164,7 @@ export function createTicketBook(db, root, now = () => new Date()) {
   /**
    * @param {string} hash
    */
-  function readBriefing(hash) {
+  function readBriefing(hash: string) {
     const file = join(root, 'blobs', 'work', `${hash}.txt`)
     if (!existsSync(file)) return ''
     return readFileSync(file, 'utf8')
@@ -166,7 +179,13 @@ export function createTicketBook(db, root, now = () => new Date()) {
    *   budget: Record<string, number>,
    * }} input
    */
-  function insertAccepted(input) {
+  function insertAccepted(input: {
+    owner: string
+    briefing: string
+    idempotencyKey: string | null
+    correlationId: string
+    budget: Record<string, number>
+  }) {
     const ticketId = randomUUID()
     const attemptId = randomUUID()
     const stamp = iso()
@@ -194,14 +213,17 @@ export function createTicketBook(db, root, now = () => new Date()) {
       stamp,
       stamp,
     )
-    return { ticket: row('SELECT * FROM work_tickets WHERE id = ?', ticketId), attempt: row('SELECT * FROM work_attempts WHERE id = ?', attemptId) }
+    return {
+      ticket: row('SELECT * FROM work_tickets WHERE id = ?', ticketId),
+      attempt: row('SELECT * FROM work_attempts WHERE id = ?', attemptId),
+    }
   }
 
   /**
    * @param {string} ticketId
    * @param {string} childSessionId
    */
-  function setChildIfEmpty(ticketId, childSessionId) {
+  function setChildIfEmpty(ticketId: string, childSessionId: string) {
     const ticket = row('SELECT * FROM work_tickets WHERE id = ?', ticketId)
     if (!ticket || ticket.child_session_id) return ticket
     db.prepare(`
@@ -222,7 +244,13 @@ export function createTicketBook(db, root, now = () => new Date()) {
    *   text: string,
    * }} input
    */
-  function insertInput(input) {
+  function insertInput(input: {
+    ticketId: string
+    attemptId: string
+    revision: number
+    kind: 'briefing' | 'supply' | 'redirect' | 'cancel_note'
+    text: string
+  }) {
     const id = randomUUID()
     const native = randomUUID()
     const stamp = iso()
@@ -244,9 +272,10 @@ export function createTicketBook(db, root, now = () => new Date()) {
    * Flush of the current input confirmed. Status becomes enqueued. Revision is not a command.
    * @param {string} ticketId
    */
-  function markEnqueued(ticketId) {
+  function markEnqueued(ticketId: string) {
     const ticket = row('SELECT * FROM work_tickets WHERE id = ?', ticketId)
-    if (!ticket || ticket.status === 'cancelled' || ticket.status === 'failed' || ticket.status === 'delivered') return ticket
+    if (!ticket || ticket.status === 'cancelled' || ticket.status === 'failed' || ticket.status === 'delivered')
+      return ticket
     db.prepare(`UPDATE work_tickets SET status = 'enqueued', updated_at = ? WHERE id = ?`).run(iso(), ticketId)
     db.prepare(`
       UPDATE work_attempts
@@ -260,7 +289,7 @@ export function createTicketBook(db, root, now = () => new Date()) {
    * @param {string} ticketId
    * @param {string} nativeMessageId
    */
-  function markStarted(ticketId, nativeMessageId) {
+  function markStarted(ticketId: string, nativeMessageId: string) {
     const ticket = row('SELECT * FROM work_tickets WHERE id = ?', ticketId)
     const attempt = ticket ? row('SELECT * FROM work_attempts WHERE id = ?', ticket.active_attempt_id) : null
     const input = attempt ? currentInput(attempt) : null
@@ -288,24 +317,44 @@ export function createTicketBook(db, root, now = () => new Date()) {
    * @param {'supply' | 'redirect'} kind
    * @param {string} text
    */
-  function advanceGeneration(ticketId, expectedRevision, kind, text) {
+  function advanceGeneration(
+    ticketId: string,
+    expectedRevision: number | null,
+    kind: 'supply' | 'redirect',
+    text: string,
+  ) {
     const ticket = row('SELECT * FROM work_tickets WHERE id = ?', ticketId)
     if (!ticket) return { error: 'NOT_FOUND' }
-    const allowed = kind === 'supply'
-      ? ticket.status === 'needs_user' || ticket.status === 'enqueued'
-      : ticket.status === 'accepted' || ticket.status === 'enqueued' || ticket.status === 'started' || ticket.status === 'needs_user' || ticket.status === 'ready'
-    if (!allowed) return { error: 'VALIDATION', message: `Ticket status ${ticket.status} cannot ${kind === 'supply' ? 'supply' : 'redirect'}.` }
-    if (!ticket.child_session_id) return { error: 'VALIDATION', message: 'The worker session does not exist yet, so this generation cannot be changed.' }
+    const allowed =
+      kind === 'supply'
+        ? ticket.status === 'needs_user' || ticket.status === 'enqueued'
+        : ticket.status === 'accepted' ||
+          ticket.status === 'enqueued' ||
+          ticket.status === 'started' ||
+          ticket.status === 'needs_user' ||
+          ticket.status === 'ready'
+    if (!allowed)
+      return {
+        error: 'VALIDATION',
+        message: `Ticket status ${ticket.status} cannot ${kind === 'supply' ? 'supply' : 'redirect'}.`,
+      }
+    if (!ticket.child_session_id)
+      return {
+        error: 'VALIDATION',
+        message: 'The worker session does not exist yet, so this generation cannot be changed.',
+      }
     const expected = expectedRevision == null ? ticket.revision : expectedRevision
     if (expected !== ticket.revision) return { error: 'CAS_CONFLICT' }
     const nextRevision = ticket.revision + 1
     const nextBrief = ticket.briefing_revision + 1
     const hash = writeBriefing(text)
-    const info = db.prepare(`
+    const info = db
+      .prepare(`
       UPDATE work_tickets
       SET revision = ?, briefing_revision = ?, briefing_hash = ?, review_status = 'none', updated_at = ?
       WHERE id = ? AND revision = ?
-    `).run(nextRevision, nextBrief, hash, iso(), ticketId, expected)
+    `)
+      .run(nextRevision, nextBrief, hash, iso(), ticketId, expected)
     if (info.changes !== 1) return { error: 'CAS_CONFLICT' }
     abandonOpenDeliveries(ticketId, nextBrief)
     const input = insertInput({
@@ -327,19 +376,22 @@ export function createTicketBook(db, root, now = () => new Date()) {
    * @param {number | null} expectedRevision
    * @param {string} [note]
    */
-function markCancelled(ticketId, expectedRevision, note?) {
+  function markCancelled(ticketId: string, expectedRevision: number | null, note?: string) {
     const ticket = row('SELECT * FROM work_tickets WHERE id = ?', ticketId)
     if (!ticket) return { error: 'NOT_FOUND' }
-    if (ticket.status === 'delivered') return { error: 'VALIDATION', message: 'A delivered ticket cannot be cancelled.' }
+    if (ticket.status === 'delivered')
+      return { error: 'VALIDATION', message: 'A delivered ticket cannot be cancelled.' }
     if (ticket.status === 'cancelled') return { ticket, input: null, already: true }
     const expected = expectedRevision == null ? ticket.revision : expectedRevision
     if (expected !== ticket.revision) return { error: 'CAS_CONFLICT' }
     const next = ticket.revision + 1
-    const info = db.prepare(`
+    const info = db
+      .prepare(`
       UPDATE work_tickets
       SET revision = ?, status = 'cancelled', cancel_requested_revision = ?, updated_at = ?
       WHERE id = ? AND revision = ?
-    `).run(next, next, iso(), ticketId, expected)
+    `)
+      .run(next, next, iso(), ticketId, expected)
     if (info.changes !== 1) return { error: 'CAS_CONFLICT' }
     db.prepare(`
       UPDATE work_attempts SET status = 'cancelled', ended_at = ? WHERE id = ? AND status != 'superseded'
@@ -367,7 +419,7 @@ function markCancelled(ticketId, expectedRevision, note?) {
    * @param {string} ticketId
    * @param {number | null} expectedRevision
    */
-  function insertRetry(ticketId, expectedRevision) {
+  function insertRetry(ticketId: string, expectedRevision: number | null) {
     const ticket = row('SELECT * FROM work_tickets WHERE id = ?', ticketId)
     if (!ticket) return { error: 'NOT_FOUND' }
     if (ticket.status !== 'failed' && ticket.status !== 'cancelled') {
@@ -379,15 +431,20 @@ function markCancelled(ticketId, expectedRevision, note?) {
     const token = (previous?.fencing_token ?? 0) + 1
     const attemptId = randomUUID()
     const next = ticket.revision + 1
-    const info = db.prepare(`
+    const info = db
+      .prepare(`
       UPDATE work_tickets
       SET revision = ?, briefing_revision = 1, status = 'accepted', review_status = 'none',
           active_attempt_id = ?, cancel_requested_revision = NULL, updated_at = ?
       WHERE id = ? AND revision = ?
-    `).run(next, attemptId, iso(), ticketId, expected)
+    `)
+      .run(next, attemptId, iso(), ticketId, expected)
     if (info.changes !== 1) return { error: 'CAS_CONFLICT' }
     if (previous) {
-      db.prepare(`UPDATE work_attempts SET status = 'superseded', ended_at = COALESCE(ended_at, ?) WHERE id = ?`).run(iso(), previous.id)
+      db.prepare(`UPDATE work_attempts SET status = 'superseded', ended_at = COALESCE(ended_at, ?) WHERE id = ?`).run(
+        iso(),
+        previous.id,
+      )
     }
     db.prepare(`
       INSERT INTO work_attempts (
@@ -403,7 +460,11 @@ function markCancelled(ticketId, expectedRevision, note?) {
       kind: 'briefing',
       text: briefing,
     })
-    return { ticket: row('SELECT * FROM work_tickets WHERE id = ?', ticketId), attempt: row('SELECT * FROM work_attempts WHERE id = ?', attemptId), input }
+    return {
+      ticket: row('SELECT * FROM work_tickets WHERE id = ?', ticketId),
+      attempt: row('SELECT * FROM work_attempts WHERE id = ?', attemptId),
+      input,
+    }
   }
 
   /**
@@ -417,7 +478,15 @@ function markCancelled(ticketId, expectedRevision, note?) {
    *   applyStatus: 'pending_completion' | 'applied' | 'stale',
    * }} input
    */
-  function insertEvent(input) {
+  function insertEvent(input: {
+    ticketId: string
+    attemptId: string
+    fencingToken: number
+    briefingRevision: number
+    kind: string
+    text: string
+    applyStatus: 'pending_completion' | 'applied' | 'stale'
+  }) {
     const eventId = randomUUID()
     const hash = writeBriefing(input.text)
     try {
@@ -449,7 +518,7 @@ function markCancelled(ticketId, expectedRevision, note?) {
    * @param {string} eventId
    * @param {string} reasonKind
    */
-  function applyTerminal(eventId, reasonKind) {
+  function applyTerminal(eventId: string, reasonKind: string) {
     const found = row('SELECT * FROM work_events WHERE event_id = ?', eventId)
     if (!found || !TERMINAL_KIND.has(found.kind)) return null
     if (found.apply_status === 'stale') {
@@ -459,19 +528,26 @@ function markCancelled(ticketId, expectedRevision, note?) {
     const ticket = row('SELECT * FROM work_tickets WHERE id = ?', found.ticket_id)
     const attempt = row('SELECT * FROM work_attempts WHERE id = ?', found.attempt_id)
     const matches = Boolean(
-      ticket && attempt
-      && ticket.active_attempt_id === found.attempt_id
-      && attempt.fencing_token === found.fencing_token
-      && ticket.briefing_revision === found.briefing_revision
-      && ticket.status !== 'cancelled'
-      && ticket.status !== 'failed'
-      && ticket.status !== 'delivered',
+      ticket &&
+        attempt &&
+        ticket.active_attempt_id === found.attempt_id &&
+        attempt.fencing_token === found.fencing_token &&
+        ticket.briefing_revision === found.briefing_revision &&
+        ticket.status !== 'cancelled' &&
+        ticket.status !== 'failed' &&
+        ticket.status !== 'delivered',
     )
     if (!matches || reasonKind !== 'completed') {
-      db.prepare(`UPDATE work_events SET apply_status = 'stale', turn_end_reason = ? WHERE event_id = ?`).run(reasonKind || '', eventId)
+      db.prepare(`UPDATE work_events SET apply_status = 'stale', turn_end_reason = ? WHERE event_id = ?`).run(
+        reasonKind || '',
+        eventId,
+      )
       return row('SELECT * FROM work_events WHERE event_id = ?', eventId)
     }
-    db.prepare(`UPDATE work_events SET apply_status = 'applied', turn_end_reason = ? WHERE event_id = ?`).run(reasonKind, eventId)
+    db.prepare(`UPDATE work_events SET apply_status = 'applied', turn_end_reason = ? WHERE event_id = ?`).run(
+      reasonKind,
+      eventId,
+    )
     const stamp = iso()
     if (found.kind === 'question') {
       db.prepare(`UPDATE work_tickets SET status = 'needs_user', updated_at = ? WHERE id = ?`).run(stamp, ticket.id)
@@ -493,7 +569,7 @@ function markCancelled(ticketId, expectedRevision, note?) {
    * @param {string} until
    * @param {number | null} seq
    */
-  function touchLease(attemptId, until, seq) {
+  function touchLease(attemptId: string, until: string, seq: number | null) {
     db.prepare(`
       UPDATE work_attempts
       SET lease_until = ?, lease_observed_seq = COALESCE(?, lease_observed_seq)
@@ -505,13 +581,17 @@ function markCancelled(ticketId, expectedRevision, note?) {
    * One open extension request per ticket. A second ask does not insert another notice.
    * @param {string} ticketId
    */
-  function markExtensionOpen(ticketId) {
+  function markExtensionOpen(ticketId: string) {
     const ticket = row('SELECT * FROM work_tickets WHERE id = ?', ticketId)
     if (!ticket) return null
     const budget = budgetObject(ticket)
     if (budget.extension === 'open') return { ticket, already: true }
     budget.extension = 'open'
-    db.prepare(`UPDATE work_tickets SET budget_json = ?, updated_at = ? WHERE id = ?`).run(JSON.stringify(budget), iso(), ticketId)
+    db.prepare(`UPDATE work_tickets SET budget_json = ?, updated_at = ? WHERE id = ?`).run(
+      JSON.stringify(budget),
+      iso(),
+      ticketId,
+    )
     return { ticket: row('SELECT * FROM work_tickets WHERE id = ?', ticketId), already: false }
   }
 
@@ -521,7 +601,11 @@ function markCancelled(ticketId, expectedRevision, note?) {
    * @param {{ wallMs?: number, maxTokens?: number }} add
    * @param {{ wallMs: number, maxTokens: number }} ceilings
    */
-  function extendBudget(ticketId, add, ceilings) {
+  function extendBudget(
+    ticketId: string,
+    add: { wallMs?: number; maxTokens?: number },
+    ceilings: { wallMs: number; maxTokens: number },
+  ) {
     const ticket = row('SELECT * FROM work_tickets WHERE id = ?', ticketId)
     if (!ticket) return { error: 'NOT_FOUND', message: 'No such ticket.' }
     if (ticket.status === 'failed' || ticket.status === 'cancelled' || ticket.status === 'delivered') {
@@ -532,24 +616,28 @@ function markCancelled(ticketId, expectedRevision, note?) {
     const beforeTokens = Number(budget.maxTokens) || ceilings.maxTokens
     const wallAdd = Number(add.wallMs)
     const tokenAdd = Number(add.maxTokens)
-    const wallMs = Number.isFinite(wallAdd) && wallAdd > 0
-      ? Math.min(ceilings.wallMs, beforeWall + Math.floor(wallAdd))
-      : beforeWall
-    const maxTokens = Number.isFinite(tokenAdd) && tokenAdd > 0
-      ? Math.min(ceilings.maxTokens, beforeTokens + Math.floor(tokenAdd))
-      : beforeTokens
+    const wallMs =
+      Number.isFinite(wallAdd) && wallAdd > 0 ? Math.min(ceilings.wallMs, beforeWall + Math.floor(wallAdd)) : beforeWall
+    const maxTokens =
+      Number.isFinite(tokenAdd) && tokenAdd > 0
+        ? Math.min(ceilings.maxTokens, beforeTokens + Math.floor(tokenAdd))
+        : beforeTokens
     if (wallMs === beforeWall && maxTokens === beforeTokens) {
       return { error: 'VALIDATION', message: 'Nothing more can be granted. The host ceiling is already used.' }
     }
     const next = { ...budget, wallMs, maxTokens, extension: null }
-    db.prepare(`UPDATE work_tickets SET budget_json = ?, updated_at = ? WHERE id = ?`).run(JSON.stringify(next), iso(), ticketId)
+    db.prepare(`UPDATE work_tickets SET budget_json = ?, updated_at = ? WHERE id = ?`).run(
+      JSON.stringify(next),
+      iso(),
+      ticketId,
+    )
     return { ticket: row('SELECT * FROM work_tickets WHERE id = ?', ticketId), budget: next }
   }
 
   /**
    * @param {{ budget_json?: string }} ticket
    */
-  function budgetObject(ticket) {
+  function budgetObject(ticket: { budget_json?: string }) {
     try {
       const parsed = JSON.parse(ticket.budget_json ?? '')
       return parsed && typeof parsed === 'object' ? parsed : {}
@@ -563,7 +651,7 @@ function markCancelled(ticketId, expectedRevision, note?) {
    * @param {string} ticketId
    * @param {string} reason
    */
-  function failRunning(ticketId, reason) {
+  function failRunning(ticketId: string, reason: string) {
     const ticket = row('SELECT * FROM work_tickets WHERE id = ?', ticketId)
     if (!ticket) return null
     if (ticket.status === 'delivered' || ticket.status === 'cancelled' || ticket.status === 'failed') return ticket
@@ -593,15 +681,22 @@ function markCancelled(ticketId, expectedRevision, note?) {
 
   function expireQuiet() {
     const failed = []
-    const running = db.prepare(`
+    const running = db
+      .prepare(`
       SELECT t.id AS ticket_id, t.budget_json, t.status AS ticket_status, a.id AS attempt_id, a.status AS attempt_status,
              a.lease_until, a.current_input_id
       FROM work_tickets t
       JOIN work_attempts a ON a.id = t.active_attempt_id
       WHERE t.status IN ('enqueued','started')
-    `).all()
+    `)
+      .all()
     for (const item of running) {
-      if (item.ticket_status === 'started' && item.attempt_status === 'started' && item.lease_until && Date.parse(item.lease_until) <= now().getTime()) {
+      if (
+        item.ticket_status === 'started' &&
+        item.attempt_status === 'started' &&
+        item.lease_until &&
+        Date.parse(item.lease_until) <= now().getTime()
+      ) {
         failRunning(item.ticket_id, 'lease')
         failed.push(item.ticket_id)
         continue
@@ -609,7 +704,11 @@ function markCancelled(ticketId, expectedRevision, note?) {
       if (item.ticket_status === 'enqueued' && item.attempt_status === 'enqueued' && item.current_input_id) {
         const input = row('SELECT * FROM work_inputs WHERE id = ?', item.current_input_id)
         let wall = 10 * 60 * 1000
-        try { wall = JSON.parse(item.budget_json).wallMs ?? wall } catch { /* host default */ }
+        try {
+          wall = JSON.parse(item.budget_json).wallMs ?? wall
+        } catch {
+          /* host default */
+        }
         if (input && input.flush_status === 'accepted' && Date.parse(input.updated_at) + wall <= now().getTime()) {
           failRunning(item.ticket_id, 'enqueue-wall')
           failed.push(item.ticket_id)
@@ -631,10 +730,21 @@ function markCancelled(ticketId, expectedRevision, note?) {
    *   turn: string | null,
    * }} input
    */
-  function insertDelivery(input) {
-    const existing = db.prepare(`
+  function insertDelivery(input: {
+    ticketId: string
+    eventId: string
+    owner: string
+    attemptId: string
+    fencingToken: number
+    briefingRevision: number
+    text: string
+    turn: string | null
+  }) {
+    const existing = db
+      .prepare(`
       SELECT * FROM user_deliveries WHERE ticket_id = ? AND result_event_id = ?
-    `).get(input.ticketId, input.eventId)
+    `)
+      .get(input.ticketId, input.eventId)
     if (existing) return { row: existing, already: true }
     const id = randomUUID()
     db.prepare(`
@@ -661,17 +771,21 @@ function markCancelled(ticketId, expectedRevision, note?) {
    * @param {string} ticketId
    * @param {string} eventId
    */
-  function deliveryForEvent(ticketId, eventId) {
-    return db.prepare(`
+  function deliveryForEvent(ticketId: string, eventId: string) {
+    return (
+      db
+        .prepare(`
       SELECT * FROM user_deliveries WHERE ticket_id = ? AND result_event_id = ?
-    `).get(ticketId, eventId) ?? null
+    `)
+        .get(ticketId, eventId) ?? null
+    )
   }
 
   /**
    * @param {string} ticketId
    * @param {number} briefingRevision
    */
-  function abandonOpenDeliveries(ticketId, briefingRevision) {
+  function abandonOpenDeliveries(ticketId: string, briefingRevision: number) {
     db.prepare(`
       UPDATE user_deliveries SET status = 'abandoned'
       WHERE ticket_id = ? AND status = 'intent' AND briefing_revision < ?
@@ -682,7 +796,7 @@ function markCancelled(ticketId, expectedRevision, note?) {
    * @param {string} ticketId
    * @param {'none' | 'candidate' | 'rejected'} review
    */
-  function setReview(ticketId, review) {
+  function setReview(ticketId: string, review: 'none' | 'candidate' | 'rejected') {
     db.prepare(`UPDATE work_tickets SET review_status = ?, updated_at = ? WHERE id = ?`).run(review, iso(), ticketId)
     return row('SELECT * FROM work_tickets WHERE id = ?', ticketId)
   }
@@ -691,7 +805,7 @@ function markCancelled(ticketId, expectedRevision, note?) {
    * @param {string} publishId
    * @param {number} seq
    */
-  function bindDelivery(publishId, seq) {
+  function bindDelivery(publishId: string, seq: number) {
     const delivery = db.prepare('SELECT * FROM user_deliveries WHERE publish_id = ?').get(publishId)
     if (!delivery || delivery.status !== 'intent') return delivery
     db.prepare(`
@@ -699,7 +813,10 @@ function markCancelled(ticketId, expectedRevision, note?) {
     `).run(seq, publishId)
     const ticket = row('SELECT * FROM work_tickets WHERE id = ?', delivery.ticket_id)
     if (ticket && ticket.status === 'ready' && ticket.briefing_revision === delivery.briefing_revision) {
-      db.prepare(`UPDATE work_tickets SET status = 'delivered', updated_at = ? WHERE id = ? AND status = 'ready'`).run(iso(), ticket.id)
+      db.prepare(`UPDATE work_tickets SET status = 'delivered', updated_at = ? WHERE id = ? AND status = 'ready'`).run(
+        iso(),
+        ticket.id,
+      )
     }
     return db.prepare('SELECT * FROM user_deliveries WHERE publish_id = ?').get(publishId)
   }
@@ -707,11 +824,15 @@ function markCancelled(ticketId, expectedRevision, note?) {
   /**
    * @param {string} owner
    */
-  function visibleTickets(owner) {
-    const rows = db.prepare(`
+  function visibleTickets(owner: string) {
+    const rows = db
+      .prepare(`
       SELECT * FROM work_tickets WHERE owner_session_id = ? ORDER BY updated_at DESC
-    `).all(owner)
-    const open = rows.filter(item => item.status !== 'delivered' && item.status !== 'cancelled' && item.status !== 'failed')
+    `)
+      .all(owner)
+    const open = rows.filter(
+      item => item.status !== 'delivered' && item.status !== 'cancelled' && item.status !== 'failed',
+    )
     const closed = rows.filter(item => !open.includes(item)).slice(0, 8)
     return [...open, ...closed]
   }
@@ -719,7 +840,7 @@ function markCancelled(ticketId, expectedRevision, note?) {
   /**
    * @param {string} owner
    */
-  function summaries(owner) {
+  function summaries(owner: string) {
     return visibleTickets(owner).map(item => ({
       id: item.id,
       status: item.status,
@@ -731,29 +852,37 @@ function markCancelled(ticketId, expectedRevision, note?) {
 
   /** Stable across unchanged rows. Lease touches are not part of it. */
   function liveStamp() {
-    const tickets = db.prepare(`
+    const tickets = db
+      .prepare(`
       SELECT id, status, briefing_revision, IFNULL(child_session_id, '') AS child_session_id,
              IFNULL(active_attempt_id, '') AS active_attempt_id, briefing_hash, updated_at
       FROM work_tickets ORDER BY id
-    `).all()
-    const events = db.prepare(`
+    `)
+      .all()
+    const events = db
+      .prepare(`
       SELECT event_id, apply_status, payload_hash FROM work_events ORDER BY event_id
-    `).all()
-    const attempts = db.prepare(`
+    `)
+      .all()
+    const attempts = db
+      .prepare(`
       SELECT id, IFNULL(started_at, '') AS started_at FROM work_attempts ORDER BY id
-    `).all()
+    `)
+      .all()
     return JSON.stringify([tickets, events, attempts])
   }
 
   /** Delivered and cancelled tickets do not light a bot, so they stay out of signals. */
   function signalMap() {
-    const rows = db.prepare(`
+    const rows = db
+      .prepare(`
       SELECT owner_session_id, status FROM work_tickets
       WHERE status != 'delivered' AND status != 'cancelled'
       ORDER BY updated_at DESC
-    `).all()
+    `)
+      .all()
     /** @type {Record<string, string[]>} */
-    const signals = {}
+    const signals: Record<string, string[]> = {}
     for (const item of rows) {
       const owner = item.owner_session_id
       const list = signals[owner] ?? []
@@ -768,7 +897,7 @@ function markCancelled(ticketId, expectedRevision, note?) {
    * Delivered and cancelled tickets do not light a bot, so they stay out of signals.
    * @param {string} sessionId
    */
-  function liveBoard(sessionId) {
+  function liveBoard(sessionId: string) {
     return {
       ok: true,
       sessionId,
@@ -781,7 +910,7 @@ function markCancelled(ticketId, expectedRevision, note?) {
   function liveBoardAll() {
     const owners = db.prepare(`SELECT DISTINCT owner_session_id AS id FROM work_tickets`).all()
     /** @type {Record<string, ReturnType<typeof cardBodies>>} */
-    const cards = {}
+    const cards: Record<string, ReturnType<typeof cardBodies>> = {}
     for (const owner of owners) cards[owner.id] = cardBodies(owner.id)
     return { signals: signalMap(), cards }
   }
@@ -790,26 +919,30 @@ function markCancelled(ticketId, expectedRevision, note?) {
    * The same rows the ticket list shows, with the fields a card reads.
    * @param {string} owner
    */
-  function cardBodies(owner) {
+  function cardBodies(owner: string) {
     const picked = visibleTickets(owner)
     if (picked.length === 0) return []
     const ids = picked.map(item => item.id)
     const marks = ids.map(() => '?').join(',')
-    const attempts = db.prepare(`
+    const attempts = db
+      .prepare(`
       SELECT id, ticket_id, started_at FROM work_attempts WHERE ticket_id IN (${marks})
-    `).all(...ids)
-    const events = db.prepare(`
+    `)
+      .all(...ids)
+    const events = db
+      .prepare(`
       SELECT * FROM work_events WHERE ticket_id IN (${marks}) ORDER BY created_at
-    `).all(...ids)
+    `)
+      .all(...ids)
     /** @type {Map<string, Array<{ id: string, started_at: string | null }>>} */
-    const byAttempt = new Map()
+    const byAttempt: Map<string, Array<{ id: string; started_at: string | null }>> = new Map()
     for (const attempt of attempts) {
       const list = byAttempt.get(attempt.ticket_id) ?? []
       list.push({ id: attempt.id, started_at: attempt.started_at ?? null })
       byAttempt.set(attempt.ticket_id, list)
     }
     /** @type {Map<string, Array<Record<string, unknown>>>} */
-    const byEvent = new Map()
+    const byEvent: Map<string, Array<Record<string, unknown>>> = new Map()
     for (const event of events) {
       const list = byEvent.get(event.ticket_id) ?? []
       list.push({
@@ -838,17 +971,20 @@ function markCancelled(ticketId, expectedRevision, note?) {
   /**
    * @param {string} id
    */
-  function detail(id) {
+  function detail(id: string) {
     const found = row('SELECT * FROM work_tickets WHERE id = ?', id)
     if (!found) return null
     return {
       ticket: found,
       attempts: db.prepare('SELECT * FROM work_attempts WHERE ticket_id = ? ORDER BY fencing_token').all(id),
       inputs: db.prepare('SELECT * FROM work_inputs WHERE ticket_id = ? ORDER BY created_at').all(id),
-      events: db.prepare('SELECT * FROM work_events WHERE ticket_id = ? ORDER BY created_at').all(id).map(event => ({
-        ...event,
-        text: readBriefing(event.payload_hash),
-      })),
+      events: db
+        .prepare('SELECT * FROM work_events WHERE ticket_id = ? ORDER BY created_at')
+        .all(id)
+        .map(event => ({
+          ...event,
+          text: readBriefing(event.payload_hash),
+        })),
       notices: db.prepare('SELECT * FROM work_notices WHERE ticket_id = ? ORDER BY created_at').all(id),
       deliveries: db.prepare('SELECT * FROM user_deliveries WHERE ticket_id = ? ORDER BY created_at').all(id),
     }
@@ -857,56 +993,68 @@ function markCancelled(ticketId, expectedRevision, note?) {
   /**
    * @param {string} owner
    */
-  function eventsWithoutNotice(owner) {
-    return db.prepare(`
+  function eventsWithoutNotice(owner: string) {
+    return db
+      .prepare(`
       SELECT e.* FROM work_events e
       JOIN work_tickets t ON t.id = e.ticket_id
       WHERE t.owner_session_id = ? AND e.notice_id IS NULL AND e.apply_status != 'stale'
       ORDER BY e.created_at
-    `).all(owner)
+    `)
+      .all(owner)
   }
 
   /**
    * @param {string} owner
    */
-  function pendingWake(owner) {
+  function pendingWake(owner: string) {
     const events = eventsWithoutNotice(owner)
-    const cancels = db.prepare(`
+    const cancels = db
+      .prepare(`
       SELECT * FROM work_tickets t
       WHERE t.owner_session_id = ? AND t.status = 'cancelled' AND t.cancel_requested_revision IS NOT NULL
         AND NOT EXISTS (
           SELECT 1 FROM work_notices n
           WHERE n.ticket_id = t.id AND n.event_id = 'cancel:' || t.cancel_requested_revision
         )
-    `).all(owner)
+    `)
+      .all(owner)
     return { events, cancels }
   }
 
   /**
    * @param {string} owner
    */
-  function openNotice(owner) {
-    const rows = db.prepare(`SELECT flush_status, observe_status FROM work_notices WHERE owner_session_id = ?`).all(owner)
-    return rows.some(item => OPEN_NOTICE_FLUSH.has(item.flush_status) || (item.flush_status === 'accepted' && item.observe_status !== 'completed'))
+  function openNotice(owner: string) {
+    const rows = db
+      .prepare(`SELECT flush_status, observe_status FROM work_notices WHERE owner_session_id = ?`)
+      .all(owner)
+    return rows.some(
+      item =>
+        OPEN_NOTICE_FLUSH.has(item.flush_status) ||
+        (item.flush_status === 'accepted' && item.observe_status !== 'completed'),
+    )
   }
 
   /**
    * @param {string} owner
    */
-  function openDelivery(owner) {
-    const found = db.prepare(`
+  function openDelivery(owner: string) {
+    const found = db
+      .prepare(`
       SELECT 1 AS ok FROM deliveries
       WHERE target_session_id = ? AND kind IN ('message','timer','webhook')
         AND status IN ('intent','flushing','accepted','claimed','started')
       LIMIT 1
-    `).get(owner)
+    `)
+      .get(owner)
     return found != null
   }
 
   /**
    * @param {string} owner
    */
-  function backgroundIds(owner) {
+  function backgroundIds(owner: string) {
     const notices = db.prepare(`SELECT native_message_id FROM work_notices WHERE owner_session_id = ?`).all(owner)
     const deliveries = db.prepare(`SELECT id FROM deliveries WHERE target_session_id = ?`).all(owner)
     return [...notices.map(item => item.native_message_id), ...deliveries.map(item => item.id)]
@@ -915,23 +1063,29 @@ function markCancelled(ticketId, expectedRevision, note?) {
   /**
    * @param {string} owner
    */
-  function latestNoticeAt(owner) {
-    const found = db.prepare(`
+  function latestNoticeAt(owner: string) {
+    const found = db
+      .prepare(`
       SELECT created_at FROM work_notices WHERE owner_session_id = ? ORDER BY created_at DESC LIMIT 1
-    `).get(owner)
+    `)
+      .get(owner)
     return found ? Date.parse(found.created_at) : null
   }
 
   function flushInputs() {
-    return db.prepare(`
+    return db
+      .prepare(`
       SELECT * FROM work_inputs WHERE flush_status IN ('intent','flushing','ambiguous') ORDER BY created_at
-    `).all()
+    `)
+      .all()
   }
 
   function flushNotices() {
-    return db.prepare(`
+    return db
+      .prepare(`
       SELECT * FROM work_notices WHERE flush_status IN ('intent','flushing','ambiguous') ORDER BY created_at
-    `).all()
+    `)
+      .all()
   }
 
   /**
@@ -942,7 +1096,14 @@ function markCancelled(ticketId, expectedRevision, note?) {
    * @param {number | null} seq
    * @param {boolean} bump
    */
-  function markInputFlush(id, status, pid, error, seq, bump) {
+  function markInputFlush(
+    id: string,
+    status: string,
+    pid: number | null,
+    error: string,
+    seq: number | null,
+    bump: boolean,
+  ) {
     if (bump) {
       db.prepare(`
         UPDATE work_inputs
@@ -967,7 +1128,14 @@ function markCancelled(ticketId, expectedRevision, note?) {
    * @param {number | null} seq
    * @param {boolean} bump
    */
-  function markNoticeGroup(nativeId, status, pid, error, seq, bump) {
+  function markNoticeGroup(
+    nativeId: string,
+    status: string,
+    pid: number | null,
+    error: string,
+    seq: number | null,
+    bump: boolean,
+  ) {
     if (bump) {
       db.prepare(`
         UPDATE work_notices
@@ -987,7 +1155,7 @@ function markCancelled(ticketId, expectedRevision, note?) {
    * @param {import('node:sqlite').StatementResultRow} input
    * @param {number | null} seq
    */
-  function noteInputAccepted(input, seq) {
+  function noteInputAccepted(input: Record<string, any>, seq: number | null) {
     markInputFlush(input.id, 'accepted', input.flush_pid ?? null, '', seq, false)
     const ticket = row('SELECT * FROM work_tickets WHERE id = ?', input.ticket_id)
     if (!ticket || ticket.active_attempt_id !== input.attempt_id) return
@@ -1000,8 +1168,8 @@ function markCancelled(ticketId, expectedRevision, note?) {
    * @param {string} nativeId
    * @param {'claimed' | 'started' | 'completed'} status
    */
-  function setNoticeObserve(nativeId, status) {
-    const rank = { none: 0, claimed: 1, started: 2, completed: 3 }
+  function setNoticeObserve(nativeId: string, status: 'claimed' | 'started' | 'completed') {
+    const rank: Record<string, number> = { none: 0, claimed: 1, started: 2, completed: 3 }
     const rows = db.prepare(`SELECT id, observe_status FROM work_notices WHERE native_message_id = ?`).all(nativeId)
     for (const item of rows) {
       if ((rank[item.observe_status] ?? 0) >= rank[status]) continue
@@ -1012,10 +1180,12 @@ function markCancelled(ticketId, expectedRevision, note?) {
   /**
    * @param {string} owner
    */
-  function intentsFor(owner) {
-    return db.prepare(`
+  function intentsFor(owner: string) {
+    return db
+      .prepare(`
       SELECT * FROM user_deliveries WHERE owner_session_id = ? AND status = 'intent' ORDER BY created_at
-    `).all(owner)
+    `)
+      .all(owner)
   }
 
   /**
@@ -1024,10 +1194,10 @@ function markCancelled(ticketId, expectedRevision, note?) {
    * @param {string} owner
    * @param {Array<{ ticketId: string, eventId: string }>} items
    */
-  function insertNotices(nativeId, owner, items) {
+  function insertNotices(nativeId: string, owner: string, items: ReadonlyArray<{ ticketId: string; eventId: string }>) {
     const stamp = iso()
     /** @type {string[]} */
-    const ids = []
+    const ids: string[] = []
     for (const item of items) {
       const id = randomUUID()
       db.prepare(`
@@ -1037,40 +1207,54 @@ function markCancelled(ticketId, expectedRevision, note?) {
         ) VALUES (?, ?, ?, ?, ?, 'intent', NULL, 0, '', NULL, 'none', ?, ?)
       `).run(id, item.ticketId, item.eventId, owner, nativeId, stamp, stamp)
       if (!item.eventId.startsWith('cancel:')) {
-        db.prepare(`UPDATE work_events SET notice_id = ? WHERE event_id = ? AND notice_id IS NULL`).run(id, item.eventId)
+        db.prepare(`UPDATE work_events SET notice_id = ? WHERE event_id = ? AND notice_id IS NULL`).run(
+          id,
+          item.eventId,
+        )
       }
       ids.push(id)
     }
     return ids
   }
 
-  function attemptsOf(ticketId) {
+  function attemptsOf(ticketId: string) {
     return db.prepare('SELECT * FROM work_attempts WHERE ticket_id = ? ORDER BY fencing_token').all(ticketId)
   }
 
   function ownerIds() {
-    return db.prepare(`SELECT DISTINCT owner_session_id AS id FROM work_tickets`).all().map(item => item.id)
+    return db
+      .prepare(`SELECT DISTINCT owner_session_id AS id FROM work_tickets`)
+      .all()
+      .map(item => item.id)
   }
 
   function childIds() {
-    return db.prepare(`
+    return db
+      .prepare(`
       SELECT DISTINCT child_session_id AS id FROM work_attempts
       WHERE child_session_id IS NOT NULL
-    `).all().map(item => item.id)
+    `)
+      .all()
+      .map(item => item.id)
   }
 
   /**
    * @param {string} owner
    */
-  function noticeIds(owner) {
-    return new Set(db.prepare(`SELECT native_message_id FROM work_notices WHERE owner_session_id = ?`).all(owner).map(item => item.native_message_id))
+  function noticeIds(owner: string) {
+    return new Set(
+      db
+        .prepare(`SELECT native_message_id FROM work_notices WHERE owner_session_id = ?`)
+        .all(owner)
+        .map(item => item.native_message_id),
+    )
   }
 }
 
 /**
  * @param {string} reason
  */
-function hostFailureText(reason) {
+function hostFailureText(reason: string) {
   if (reason === 'wall') return 'The worker hit its time limit and this round has stopped.'
   if (reason === 'tokens') return 'The worker hit its token limit and this round has stopped.'
   if (reason === 'grant-denied') return 'The main session refused more budget and this round has stopped.'

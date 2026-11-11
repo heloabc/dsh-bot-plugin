@@ -69,13 +69,16 @@ test('idempotency, cas, and foreign session id are host-scoped', async () => {
   engine.noteWatermark('session-a', '4')
   const tools = Object.fromEntries(toolDefinitions(engine, () => 2).map(item => [item.name, item]))
   const exec = { agent: { id: 'session-a' }, signal: new AbortController().signal }
-  const first = await tools.foundations_remember.execute({
-    target: 'fact',
-    content: 'The user is called Ada',
-    idempotencyKey: 'k1',
-    sessionId: 'session-b',
-    sourceEventId: '9',
-  }, exec)
+  const first = await tools.foundations_remember.execute(
+    {
+      target: 'fact',
+      content: 'The user is called Ada',
+      idempotencyKey: 'k1',
+      sessionId: 'session-b',
+      sourceEventId: '9',
+    },
+    exec,
+  )
   assert.equal(first.ok, false)
   assert.equal(first.code, 'VALIDATION')
   const savedArgs = {
@@ -93,36 +96,48 @@ test('idempotency, cas, and foreign session id are host-scoped', async () => {
   assert.equal(row.session_id, 'session-a')
   const replay = await tools.foundations_remember.execute(savedArgs, exec)
   assert.equal(replay.outcome, 'replayed')
-  const clash = await tools.foundations_remember.execute({
-    target: 'fact',
-    content: 'another fact',
-    idempotencyKey: 'k1',
-  }, exec)
+  const clash = await tools.foundations_remember.execute(
+    {
+      target: 'fact',
+      content: 'another fact',
+      idempotencyKey: 'k1',
+    },
+    exec,
+  )
   assert.equal(clash.code, 'IDEMPOTENCY_KEY_REUSE')
-  const wrong = await tools.foundations_correct.execute({
-    target: 'fact',
-    id: saved.data.id,
-    content: 'The user is called Bea',
-    expectedRevision: 9,
-    idempotencyKey: 'c1',
-  }, exec)
+  const wrong = await tools.foundations_correct.execute(
+    {
+      target: 'fact',
+      id: saved.data.id,
+      content: 'The user is called Bea',
+      expectedRevision: 9,
+      idempotencyKey: 'c1',
+    },
+    exec,
+  )
   assert.equal(wrong.code, 'CAS_CONFLICT')
-  const fixed = await tools.foundations_correct.execute({
-    target: 'fact',
-    id: saved.data.id,
-    content: 'The user is called Bea',
-    expectedRevision: 1,
-    idempotencyKey: 'c1',
-  }, exec)
+  const fixed = await tools.foundations_correct.execute(
+    {
+      target: 'fact',
+      id: saved.data.id,
+      content: 'The user is called Bea',
+      expectedRevision: 1,
+      idempotencyKey: 'c1',
+    },
+    exec,
+  )
   assert.equal(fixed.ok, true)
   const old = store.db.prepare('SELECT status FROM facts WHERE id = ?').get(saved.data.id)
   assert.equal(old.status, 'superseded')
-  const forgotten = await tools.foundations_forget.execute({
-    target: 'fact',
-    id: fixed.data.id,
-    expectedRevision: 1,
-    idempotencyKey: 'f1',
-  }, exec)
+  const forgotten = await tools.foundations_forget.execute(
+    {
+      target: 'fact',
+      id: fixed.data.id,
+      expectedRevision: 1,
+      idempotencyKey: 'f1',
+    },
+    exec,
+  )
   assert.equal(forgotten.ok, true)
   const recalled = await tools.foundations_recall.execute({ query: 'Bea' }, exec)
   assert.equal(recalled.data.facts.length, 0)
@@ -136,27 +151,36 @@ test('chinese substring fallback and state cas', async () => {
   const { store, engine } = tempStore()
   const tools = Object.fromEntries(toolDefinitions(engine, () => 1).map(item => [item.name, item]))
   const exec = { agent: { id: 'session-zh' }, signal: new AbortController().signal }
-  await tools.foundations_remember.execute({
-    target: 'memory',
-    title: 'taste',
-    content: '用户喜欢吃小笼包',
-    idempotencyKey: 'zh',
-  }, exec)
+  await tools.foundations_remember.execute(
+    {
+      target: 'memory',
+      title: 'taste',
+      content: '用户喜欢吃小笼包',
+      idempotencyKey: 'zh',
+    },
+    exec,
+  )
   const found = await tools.foundations_recall.execute({ query: '小笼包' }, exec)
   assert.equal(found.data.memories.length, 1)
   assert.equal(found.data.strategy, 'substring')
-  const updated = await tools.foundations_state_update.execute({
-    expectedRevision: 0,
-    patch: { currentGoal: 'remember the taste', todos: [{ id: '1', text: 'buy soup dumplings', status: 'open' }] },
-    idempotencyKey: 's1',
-  }, exec)
+  const updated = await tools.foundations_state_update.execute(
+    {
+      expectedRevision: 0,
+      patch: { currentGoal: 'remember the taste', todos: [{ id: '1', text: 'buy soup dumplings', status: 'open' }] },
+      idempotencyKey: 's1',
+    },
+    exec,
+  )
   assert.equal(updated.ok, true)
   assert.equal(updated.storeRevision, 1)
-  const lost = await tools.foundations_state_update.execute({
-    expectedRevision: 0,
-    patch: { currentGoal: 'overwrite' },
-    idempotencyKey: 's2',
-  }, exec)
+  const lost = await tools.foundations_state_update.execute(
+    {
+      expectedRevision: 0,
+      patch: { currentGoal: 'overwrite' },
+      idempotencyKey: 's2',
+    },
+    exec,
+  )
   assert.equal(lost.code, 'CAS_CONFLICT')
   store.close()
 })
@@ -165,17 +189,28 @@ test('two writers either serialize or return BUSY', async () => {
   const { store, engine } = tempStore()
   engine.ensureSession('session-lock')
   const started = []
-  const results = await Promise.all([0, 1].map(index => engine.store.write('session-lock', () => {
-    started.push(index)
-    const wait = Date.now() + 30
-    while (Date.now() < wait) { /* hold the write lock */ }
-    engine.store.db.prepare(`
+  const results: Array<{ ok: boolean; value?: any; code?: any }> = await Promise.all(
+    [0, 1].map(index =>
+      engine.store
+        .write('session-lock', () => {
+          started.push(index)
+          const wait = Date.now() + 30
+          while (Date.now() < wait) {
+            /* hold the write lock */
+          }
+          engine.store.db
+            .prepare(`
       INSERT INTO facts (
         session_id, content, status, source_type, revision, priority, created_at, updated_at
       ) VALUES ('session-lock', ?, 'active', 'explicit_tool', 1, 100, ?, ?)
-    `).run(`row-${index}`, new Date().toISOString(), new Date().toISOString())
-    return index
-  }).then((value: any) => ({ ok: true, value })).catch((error: any) => ({ ok: false, code: error.code }))))
+    `)
+            .run(`row-${index}`, new Date().toISOString(), new Date().toISOString())
+          return index
+        })
+        .then((value: any) => ({ ok: true, value }))
+        .catch((error: any) => ({ ok: false, code: error.code })),
+    ),
+  )
   assert.equal(results.filter(item => item.ok).length + results.filter(item => item.code === 'BUSY').length, 2)
   assert.ok(results.some(item => item.ok))
   store.close()

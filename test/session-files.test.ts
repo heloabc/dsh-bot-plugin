@@ -23,10 +23,13 @@ test('purge removes only that session directory and its archive id', () => {
   const cache = join(root, `${id}.json`)
   writeFileSync(cache, '{}')
   const workspace = join(root, 'workspace.json')
-  writeFileSync(workspace, JSON.stringify({
-    global: { archivedSessionIds: [id, 'session-keep'] },
-    tables: { workspaces: { a: { sessionIds: [id, 'session-keep'] } } },
-  }))
+  writeFileSync(
+    workspace,
+    JSON.stringify({
+      global: { archivedSessionIds: [id, 'session-keep'] },
+      tables: { workspaces: { a: { sessionIds: [id, 'session-keep'] } } },
+    }),
+  )
   purgeSessionFiles({ sessionsRoot: root, cacheFile: cache, workspaceFile: workspace, sessionId: id, cwd })
   assert.equal(existsSync(dir), false)
   assert.equal(existsSync(other), true)
@@ -45,13 +48,17 @@ test('purge refuses a session directory that is a symlink', () => {
   const dir = sessionDirectory(root, cwd, id)
   mkdirSync(join(dir, '..'), { recursive: true })
   symlinkSync(outside, dir)
-  assert.throws(() => purgeSessionFiles({
-    sessionsRoot: root,
-    cacheFile: '',
-    workspaceFile: join(root, 'missing.json'),
-    sessionId: id,
-    cwd,
-  }), /symlink/)
+  assert.throws(
+    () =>
+      purgeSessionFiles({
+        sessionsRoot: root,
+        cacheFile: '',
+        workspaceFile: join(root, 'missing.json'),
+        sessionId: id,
+        cwd,
+      }),
+    /symlink/,
+  )
   assert.equal(existsSync(join(outside, 'keep')), true)
 })
 

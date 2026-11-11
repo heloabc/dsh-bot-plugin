@@ -17,7 +17,15 @@ const MAX_ATTEMPTS = 5
  *   markRetry: (error: string) => void,
  * }} spec
  */
-export async function durableFollowup(spec) {
+export async function durableFollowup(spec: {
+  attempts: number
+  markFlushing: () => void
+  push: () => Promise<{ ok?: boolean; ambiguous?: boolean; seq?: number | null; error?: string }>
+  markAccepted: (seq: number | null) => void
+  markAmbiguous: (error: string) => void
+  markDead: (error: string) => void
+  markRetry: (error: string) => void
+}) {
   if (spec.attempts >= MAX_ATTEMPTS) {
     spec.markDead('retry-limit')
     return { ok: false, status: 'dead' }

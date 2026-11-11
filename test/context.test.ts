@@ -20,18 +20,25 @@ test('frozen view does not change mid-turn and soul is not truncated', () => {
   assert.match(first.texts['foundations:rules'], /When ok is false/)
   assert.doesNotMatch(first.texts['foundations:rules'], /accepted is not enqueued/)
   assert.doesNotMatch(first.texts['foundations:rules'], /foundations_grant/)
-  store.db.prepare(`
+  store.db
+    .prepare(`
     INSERT INTO facts (
       session_id, content, status, source_type, revision, priority, created_at, updated_at
     ) VALUES ('session-a', 'a new fact', 'active', 'explicit_tool', 1, 100, ?, ?)
-  `).run(new Date().toISOString(), new Date().toISOString())
+  `)
+    .run(new Date().toISOString(), new Date().toISOString())
   const second = renderSession(engine, 'session-a', 128000)
   assert.equal(second.viewRevision, first.viewRevision)
-  assert.equal(second.texts['foundations:user'].includes('a new fact') || second.texts['foundations:facts'].includes('a new fact'), false)
+  assert.equal(
+    second.texts['foundations:user'].includes('a new fact') || second.texts['foundations:facts'].includes('a new fact'),
+    false,
+  )
   engine.freeze('session-a', 2)
   const third = renderSession(engine, 'session-a', 128000)
   assert.notEqual(third.viewRevision, first.viewRevision)
-  assert.ok(third.texts['foundations:user'].includes('a new fact') || third.texts['foundations:facts'].includes('a new fact'))
+  assert.ok(
+    third.texts['foundations:user'].includes('a new fact') || third.texts['foundations:facts'].includes('a new fact'),
+  )
   const huge = engine.confirmPersona('rule'.repeat(20000))
   engine.bindPersona('session-a', huge.id)
   engine.openViews.delete('session-a')
@@ -50,11 +57,13 @@ test('a declared name is the assistant identity and user facts stay about the us
   const persona = engine.confirmPersona('Name: Scout\n\nKeep it short.')
   engine.bindPersona('session-a', persona.id)
   const now = new Date().toISOString()
-  store.db.prepare(`
+  store.db
+    .prepare(`
     INSERT INTO facts (
       session_id, content, status, source_type, revision, priority, created_at, updated_at
     ) VALUES ('session-a', 'The user is called Ada', 'active', 'explicit_tool', 1, 100, ?, ?)
-  `).run(now, now)
+  `)
+    .run(now, now)
   engine.freeze('session-a', 1)
   const rendered = renderSession(engine, 'session-a', 128000)
   const soul = rendered.texts['foundations:soul']
@@ -78,7 +87,11 @@ test('same hash stays present until a removal bumps the internal epoch', () => {
   engine.noteSurface('session-a', 8)
   const again = renderSession(engine, 'session-a', 128000)
   assert.equal(again.snapshotHash, first.snapshotHash)
-  assert.equal(engine.view(engine.binding('session-a').last_view_revision ? 'session-a' : 'session-a', again.viewRevision).presence, 'present')
+  assert.equal(
+    engine.view(engine.binding('session-a').last_view_revision ? 'session-a' : 'session-a', again.viewRevision)
+      .presence,
+    'present',
+  )
   const removed = engine.noteRemoval('session-a', [8])
   assert.equal(removed, true)
   assert.equal(engine.binding('session-a').compaction_epoch, 1)
@@ -98,21 +111,39 @@ test('a bound persona stays in the system prompt after compaction', async () => 
   assert.equal(engine.binding('session-plain').persona_version_id, null)
   store.close()
 
-  const sections : any[] = []
-  const listeners : any[] = []
+  const sections: any[] = []
+  const listeners: any[] = []
   const plugin = await import('../src/index.ts')
-  plugin.apply({
-    profileContext: { dir },
-    systemPrompt: {
-      section(entry: any) { sections.push(entry); return () => {} },
-      context(entry: any) { sections.push(entry); return () => {} },
+  plugin.apply(
+    {
+      profileContext: { dir },
+      systemPrompt: {
+        section(entry: any) {
+          sections.push(entry)
+          return () => {}
+        },
+        context(entry: any) {
+          sections.push(entry)
+          return () => {}
+        },
+      },
+      tools: {
+        register() {
+          return () => {}
+        },
+      },
+      on(name: any, fn: any) {
+        listeners.push([name, fn])
+        return fn
+      },
+      effect(fn: any) {
+        fn()
+      },
+      logger: { info() {} },
+      webServer: null,
     },
-    tools: { register() { return () => {} } },
-    on(name: any, fn: any) { listeners.push([name, fn]); return fn },
-    effect(fn: any) { fn() },
-    logger: { info() {} },
-    webServer: null,
-  }, { dataDir })
+    { dataDir },
+  )
 
   const soul = sections.find(entry => entry.name === 'foundations:soul')
   const text = soul.text({ agent: { id: 'session-bot' } })
@@ -128,11 +159,14 @@ test('a bound persona stays in the system prompt after compaction', async () => 
 })
 
 test('the peer list names other bots and leaves the current bot out', () => {
-  const text = renderPeers([
-    { sessionId: 'session-dog', name: 'Scout' },
-    { sessionId: 'session-er', name: 'Ernie' },
-    { sessionId: 'session-bare', name: '' },
-  ], 'session-dog')
+  const text = renderPeers(
+    [
+      { sessionId: 'session-dog', name: 'Scout' },
+      { sessionId: 'session-er', name: 'Ernie' },
+      { sessionId: 'session-bare', name: '' },
+    ],
+    'session-dog',
+  )
   assert.match(text, /Other bots/)
   assert.match(text, /- Ernie session-er/)
   assert.match(text, /- unnamed session-bare/)
@@ -142,7 +176,9 @@ test('the peer list names other bots and leaves the current bot out', () => {
 })
 
 test('ticket protocol stays on the ticket block and a private draft is labeled', () => {
-  const tickets = renderTickets([{ id: 't1', status: 'started', briefing_revision: 2, child_session_id: 'worker-t1', summary: 'write the doc' }])
+  const tickets = renderTickets([
+    { id: 't1', status: 'started', briefing_revision: 2, child_session_id: 'worker-t1', summary: 'write the doc' },
+  ])
   assert.match(tickets, /accepted is not enqueued/)
   assert.match(tickets, /foundations_grant/)
   assert.match(tickets, /Do not say accepted, enqueued, or publish/)
@@ -153,10 +189,19 @@ test('ticket protocol stays on the ticket block and a private draft is labeled',
   const engine = createEngine(store)
   engine.ensureSession('session-a')
   const now = new Date().toISOString()
-  store.db.prepare(`
+  store.db
+    .prepare(`
     INSERT INTO working_state (session_id, revision, payload_json, updated_at)
     VALUES ('session-a', 1, ?, ?)
-  `).run(JSON.stringify({ currentGoal: 'finish the sentence', todos: [{ text: 'answer first', status: 'open' }], notes: '' }), now)
+  `)
+    .run(
+      JSON.stringify({
+        currentGoal: 'finish the sentence',
+        todos: [{ text: 'answer first', status: 'open' }],
+        notes: '',
+      }),
+      now,
+    )
   engine.freeze('session-a', 1)
   const rendered = renderSession(engine, 'session-a', 128000)
   assert.match(rendered.texts['foundations:state'], /private draft/)
@@ -178,22 +223,40 @@ test('other bots are injected for a bot and omitted for an ordinary session', as
   engine.ensureSession('session-plain')
   store.close()
 
-  const sections : any[] = []
-  const tools : any[] = []
+  const sections: any[] = []
+  const tools: any[] = []
   const plugin = await import('../src/index.ts')
-  plugin.apply({
-    profileContext: { dir },
-    systemPrompt: {
-      section(entry: any) { sections.push(entry); return () => {} },
-      context(entry: any) { sections.push(entry); return () => {} },
+  plugin.apply(
+    {
+      profileContext: { dir },
+      systemPrompt: {
+        section(entry: any) {
+          sections.push(entry)
+          return () => {}
+        },
+        context(entry: any) {
+          sections.push(entry)
+          return () => {}
+        },
+      },
+      tools: {
+        register(entry: any) {
+          tools.push(entry)
+          return () => {}
+        },
+      },
+      agents: {},
+      on() {
+        return () => {}
+      },
+      effect(fn: any) {
+        fn()
+      },
+      logger: { info() {} },
+      webServer: null,
     },
-    tools: { register(entry: any) { tools.push(entry); return () => {} } },
-    agents: {},
-    on() { return () => {} },
-    effect(fn: any) { fn() },
-    logger: { info() {} },
-    webServer: null,
-  }, { dataDir })
+    { dataDir },
+  )
 
   const peers = sections.find(entry => entry.name === 'foundations:peers')
   assert.equal(peers.order, 42)
@@ -219,25 +282,44 @@ test('other bots are injected for a bot and omitted for an ordinary session', as
 
 test('plugin does not register a complete section', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'sf-plugin-'))
-  const sections : any[] = []
-  const contexts : any[] = []
-  const tools : any[] = []
-  const listeners : any[] = []
+  const sections: any[] = []
+  const contexts: any[] = []
+  const tools: any[] = []
+  const listeners: any[] = []
   const ctx = {
     profileContext: { dir },
     systemPrompt: {
-      section(entry: any) { sections.push(entry); return () => {} },
-      context(entry: any) { contexts.push(entry); return () => {} },
+      section(entry: any) {
+        sections.push(entry)
+        return () => {}
+      },
+      context(entry: any) {
+        contexts.push(entry)
+        return () => {}
+      },
     },
-    tools: { register(entry: any) { tools.push(entry); return () => {} } },
-    on(name: any, fn: any) { listeners.push(name); return fn },
-    effect(fn: any) { fn() },
+    tools: {
+      register(entry: any) {
+        tools.push(entry)
+        return () => {}
+      },
+    },
+    on(name: any, fn: any) {
+      listeners.push(name)
+      return fn
+    },
+    effect(fn: any) {
+      fn()
+    },
     logger: { info() {} },
     webServer: null,
   }
   const plugin = await import('../src/index.ts')
   plugin.apply(ctx, { dataDir: join(dir, 'data') })
-  assert.equal(sections.some(entry => entry.complete === true), false)
+  assert.equal(
+    sections.some(entry => entry.complete === true),
+    false,
+  )
   assert.equal(listeners.includes('system-prompt/assemble'), false)
   assert.ok(sections.some(entry => entry.name === 'foundations:soul'))
   assert.ok(contexts.some(entry => entry.name === 'foundations:revocation' && entry.required === true))

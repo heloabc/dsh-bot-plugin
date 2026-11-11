@@ -4,7 +4,18 @@
  * This module does not keep a second execution queue.
  */
 
+import type { HostContext } from './host.ts'
 import { workerFileSetup } from './work-child.ts'
+
+type LogEvent = {
+  type?: string
+  seq?: number | null
+  data?: {
+    id?: string
+    message?: { id?: string }
+    inserted?: Array<{ id?: string }>
+  }
+}
 
 const handles = new Map()
 const loading = new Map()
@@ -16,7 +27,7 @@ const loading = new Map()
  * @param {import('@deepseek-ai/cordis').Context} ctx
  * @param {string} sessionId
  */
-export function liveAgent(ctx, sessionId) {
+export function liveAgent(ctx: HostContext, sessionId: string) {
   try {
     const live = ctx.agents?.get?.(sessionId)
     if (live) return live
@@ -30,24 +41,27 @@ export function liveAgent(ctx, sessionId) {
  * @param {import('@deepseek-ai/cordis').Context} ctx
  * @param {string} sessionId
  */
-export async function loadAgent(ctx, sessionId) {
+export async function loadAgent(ctx: HostContext, sessionId: string) {
   const live = ctx.agents.get(sessionId)
   if (live) return { agent: live, owned: false }
   const owned = handles.get(sessionId)
   if (owned) return { agent: owned.agent, owned: true }
   const pending = loading.get(sessionId)
   if (pending) return pending
-  const job = ctx.agents.resume({
-    resumeSessionId: sessionId,
-    ...sessionId.startsWith('worker-') ? { setup: workerFileSetup(ctx, null) } : {},
-  }).then(handle => {
-    handles.set(sessionId, handle)
-    loading.delete(sessionId)
-    return { agent: handle.agent, owned: true }
-  }).catch(error => {
-    loading.delete(sessionId)
-    throw error
-  })
+  const job = ctx.agents
+    .resume({
+      resumeSessionId: sessionId,
+      ...(sessionId.startsWith('worker-') ? { setup: workerFileSetup(ctx, null) } : {}),
+    })
+    .then((handle: any) => {
+      handles.set(sessionId, handle)
+      loading.delete(sessionId)
+      return { agent: handle.agent, owned: true }
+    })
+    .catch((error: any) => {
+      loading.delete(sessionId)
+      throw error
+    })
   loading.set(sessionId, job)
   return job
 }
@@ -60,7 +74,7 @@ export async function loadAgent(ctx, sessionId) {
  * @param {string} messageId
  * @param {string} text
  */
-export async function followupDurable(ctx, sessionId, messageId, text) {
+export async function followupDurable(ctx: HostContext, sessionId: string, messageId: string, text: string) {
   if (process.env.SESSION_FOUNDATIONS_CRASH_BEFORE_FLUSH === '1') {
     const loaded = await loadAgent(ctx, sessionId)
     loaded.agent.followup(userMessage(messageId, text))
@@ -78,7 +92,7 @@ export async function followupDurable(ctx, sessionId, messageId, text) {
   let flushed = false
   let flushError = ''
   try {
-    flushed = await ctx.sessions.flush(agent.session) === true
+    flushed = (await ctx.sessions.flush(agent.session)) === true
   } catch (error) {
     flushError = error instanceof Error ? error.message : String(error)
   }
@@ -96,10 +110,12 @@ export async function followupDurable(ctx, sessionId, messageId, text) {
  * @param {{ snapshotEvents?: () => Array<{ type?: string, seq?: number, data?: { inserted?: Array<{ id?: string }> } }> }} session
  * @param {string} messageId
  */
-export function logHasMessage(session, messageId) {
+export function logHasMessage(session: { snapshotEvents?: () => LogEvent[] }, messageId: string) {
   const events = session.snapshotEvents?.() ?? []
-  return events.some(event => event.type === 'agent/inbox/spliced' && insertedIds(event).includes(messageId))
-    || events.some(event => event.type === 'user/message' && messageIdOf(event) === messageId)
+  return (
+    events.some(event => event.type === 'agent/inbox/spliced' && insertedIds(event).includes(messageId)) ||
+    events.some(event => event.type === 'user/message' && messageIdOf(event) === messageId)
+  )
 }
 
 /**
@@ -109,7 +125,7 @@ export function logHasMessage(session, messageId) {
  * @param {string} sessionId
  * @returns {Promise<Array<{ type?: string, seq?: number, data?: { id?: string, message?: { id?: string }, inserted?: Array<{ id?: string }> } }>>}
  */
-export async function sessionEvents(ctx, sessionId) {
+export async function sessionEvents(ctx: HostContext, sessionId: string): Promise<LogEvent[]> {
   const agent = liveAgent(ctx, sessionId)
   if (agent?.session?.snapshotEvents) return agent.session.snapshotEvents()
   const persistence = ctx.sessionPersistence
@@ -131,7 +147,7 @@ export async function sessionEvents(ctx, sessionId) {
 /**
  * @param {unknown} error
  */
-function missingSession(error) {
+function missingSession(error: unknown) {
   const name = error instanceof Error ? error.name : ''
   return name === 'SessionPersistenceNotFoundError' || name === 'SessionNotFoundError'
 }
@@ -140,7 +156,7 @@ function missingSession(error) {
  * @param {{ snapshotEvents?: () => Array<{ type?: string, seq?: number, data?: { inserted?: Array<{ id?: string }> } }> }} session
  * @param {string} messageId
  */
-export function spliceSeq(session, messageId) {
+export function spliceSeq(session: { snapshotEvents?: () => LogEvent[] }, messageId: string) {
   const events = session.snapshotEvents?.() ?? []
   for (let index = events.length - 1; index >= 0; index -= 1) {
     const event = events[index]
@@ -155,7 +171,7 @@ export function spliceSeq(session, messageId) {
  * @param {string} sessionId
  * @param {string} messageId
  */
-export async function removePending(ctx, sessionId, messageId) {
+export async function removePending(ctx: HostContext, sessionId: string, messageId: string) {
   const live = ctx.agents.get(sessionId) ?? handles.get(sessionId)?.agent
   if (!live?.inbox?.remove) return false
   return live.inbox.remove(messageId) === true
@@ -165,7 +181,7 @@ export async function removePending(ctx, sessionId, messageId) {
  * @param {string} messageId
  * @param {string} text
  */
-export function userMessage(messageId, text) {
+export function userMessage(messageId: string, text: string) {
   return Object.freeze({
     id: messageId,
     role: 'user',
@@ -177,7 +193,7 @@ export function userMessage(messageId, text) {
 /**
  * @param {{ data?: { inserted?: Array<{ id?: string }> } }} event
  */
-function insertedIds(event) {
+function insertedIds(event: LogEvent) {
   const inserted = event.data?.inserted
   if (!Array.isArray(inserted)) return []
   return inserted.map(message => message?.id).filter(id => typeof id === 'string')
@@ -186,6 +202,6 @@ function insertedIds(event) {
 /**
  * @param {{ data?: { id?: string, message?: { id?: string } } }} event
  */
-function messageIdOf(event) {
+function messageIdOf(event: LogEvent) {
   return event.data?.id ?? event.data?.message?.id ?? ''
 }

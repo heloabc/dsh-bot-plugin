@@ -6,9 +6,9 @@
  */
 
 export type LivePatch =
-  | { t: 'v', v: unknown }
-  | { t: 'o', s: Record<string, LivePatch>, d?: string[] }
-  | { t: 'l', id: string, s?: Record<string, LivePatch>, d?: string[], order?: string[] }
+  | { t: 'v'; v: unknown }
+  | { t: 'o'; s: Record<string, LivePatch>; d?: string[] }
+  | { t: 'l'; id: string; s?: Record<string, LivePatch>; d?: string[]; order?: string[] }
 
 /** Append user/assistant messages kept on session/follow. Older history is the CDC prefix. */
 export const FOLLOW_TAIL_MESSAGES = 4
@@ -20,7 +20,9 @@ function stable(value: unknown): string {
   if (value === null || typeof value !== 'object') return JSON.stringify(value) ?? 'null'
   if (Array.isArray(value)) return `[${value.map(item => stable(item)).join(',')}]`
   const record = value as Record<string, unknown>
-  const keys = Object.keys(record).filter(key => record[key] !== undefined).sort()
+  const keys = Object.keys(record)
+    .filter(key => record[key] !== undefined)
+    .sort()
   return `{${keys.map(key => `${JSON.stringify(key)}:${stable(record[key])}`).join(',')}}`
 }
 
@@ -133,14 +135,17 @@ export function applyValue(prev: unknown, patch: unknown): unknown {
   return applyList(prev, node)
 }
 
-function applyObject(prev: unknown, patch: { s: Record<string, LivePatch>, d?: string[] }): Record<string, unknown> {
+function applyObject(prev: unknown, patch: { s: Record<string, LivePatch>; d?: string[] }): Record<string, unknown> {
   const base: Record<string, unknown> = isObject(prev) ? { ...prev } : {}
   for (const key of patch.d ?? []) delete base[key]
   for (const [key, child] of Object.entries(patch.s)) base[key] = applyValue(base[key], child)
   return base
 }
 
-function applyList(prev: unknown, patch: { id: string, s?: Record<string, LivePatch>, d?: string[], order?: string[] }): unknown[] {
+function applyList(
+  prev: unknown,
+  patch: { id: string; s?: Record<string, LivePatch>; d?: string[]; order?: string[] },
+): unknown[] {
   const field = patch.id
   const items = Array.isArray(prev) ? prev.slice() : []
   const removed = new Set(patch.d ?? [])

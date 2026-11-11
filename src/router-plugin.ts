@@ -8,10 +8,10 @@
  */
 
 /** Plugin display name used by the Loader. */
-export const name = 'dsh-bot-router';
+export const name = 'dsh-bot-router'
 
 /** No Host services are required. */
-export const inject = [];
+export const inject = []
 
 /** Host half is intentionally empty: routing is client-only. */
 export function apply() {}

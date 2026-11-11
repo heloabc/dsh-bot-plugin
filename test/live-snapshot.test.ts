@@ -1,7 +1,14 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { assembleChunks } from '../src/cdc.ts'
-import { canonicalBytes, createSessionSnapshots, eventLogBytes, eventsBefore, eventsWindow, followTailStart } from '../src/live-snapshot.ts'
+import {
+  canonicalBytes,
+  createSessionSnapshots,
+  eventLogBytes,
+  eventsBefore,
+  eventsWindow,
+  followTailStart,
+} from '../src/live-snapshot.ts'
 import { openPageLive } from '../src/work-http.ts'
 
 function filler(seed: number, length: number) {
@@ -55,10 +62,16 @@ test('the follow opening page stays out of the chunked prefix', () => {
     { type: 'assistant/message', seq: 12, surfaceOp: 'append', data: { text: 'TAIL-MARKER' } },
   ]
   const prefix = eventsBefore(log, 12)
-  assert.deepEqual(prefix.map(event => event.seq), [10, 11])
+  assert.deepEqual(
+    prefix.map(event => event.seq),
+    [10, 11],
+  )
   assert.equal(eventLogBytes(prefix).toString('utf8').includes('TAIL-MARKER'), false)
   assert.deepEqual(eventsBefore(log, 0), [])
-  assert.deepEqual(eventsBefore(log, 99).map(event => event.seq), [10, 11, 12])
+  assert.deepEqual(
+    eventsBefore(log, 99).map(event => event.seq),
+    [10, 11, 12],
+  )
   const snapshots = createSessionSnapshots()
   const plan = snapshots.publish('sess', prefix)
   assert.equal(plan.totalSize, eventLogBytes(prefix).length)
@@ -69,12 +82,23 @@ test('the follow opening page stays out of the chunked prefix', () => {
 test('four follow messages leave the older log for CDC', () => {
   const log = []
   for (let seq = 0; seq < 12; seq += 1) {
-    log.push({ type: seq % 2 === 0 ? 'user/message' : 'assistant/message', seq, surfaceOp: 'append', data: { text: `m${seq}` } })
+    log.push({
+      type: seq % 2 === 0 ? 'user/message' : 'assistant/message',
+      seq,
+      surfaceOp: 'append',
+      data: { text: `m${seq}` },
+    })
   }
   const cut = followTailStart(log, 4)
   assert.equal(cut, 8)
-  assert.deepEqual(eventsBefore(log, cut).map(event => event.seq), [0, 1, 2, 3, 4, 5, 6, 7])
-  assert.deepEqual(eventsWindow(log, cut, cut + 2).map(event => event.seq), [8, 9])
+  assert.deepEqual(
+    eventsBefore(log, cut).map(event => event.seq),
+    [0, 1, 2, 3, 4, 5, 6, 7],
+  )
+  assert.deepEqual(
+    eventsWindow(log, cut, cut + 2).map(event => event.seq),
+    [8, 9],
+  )
   assert.equal(eventLogBytes(eventsBefore(log, cut)).toString('utf8').includes('m8'), false)
 })
 
@@ -94,23 +118,37 @@ test('page live sends changed desk and work as one snapshot, not CDC chunks', as
   let stamp = '1'
   const work = { signals: { 'bot-a': ['ready'] }, cards: {} }
   const desk = { sessions: { previews: { a: marker } } }
-  const chunks : any[] = []
+  const chunks: any[] = []
   let close = () => {}
-  const pending = openPageLive({
-    socket: { setTimeout() {} },
-    on(event: any, fn: any) { if (event === 'close') close = fn },
-  }, {
-    writableEnded: false,
-    writeHead() {},
-    write(chunk: any) { chunks.push(String(chunk)); return true },
-    end() { this.writableEnded = true },
-    on() {},
-  }, {
-    workStamp: () => stamp,
-    workBoard: () => work,
-    loadDesk: async () => desk,
-    deskIntervalMs: 60_000,
-  })
+  let ended = false
+  const pending = openPageLive(
+    {
+      socket: { setTimeout() {} },
+      on(event: any, fn: any) {
+        if (event === 'close') close = fn
+      },
+    },
+    {
+      get writableEnded() {
+        return ended
+      },
+      writeHead() {},
+      write(chunk: any) {
+        chunks.push(String(chunk))
+        return true
+      },
+      end() {
+        ended = true
+      },
+      on() {},
+    },
+    {
+      workStamp: () => stamp,
+      workBoard: () => work,
+      loadDesk: async () => desk,
+      deskIntervalMs: 60_000,
+    },
+  )
   await new Promise(resolve => setImmediate(resolve))
   const frames = chunks.filter(chunk => chunk.startsWith('event: snapshot'))
   assert.ok(frames.length >= 2)
@@ -120,7 +158,10 @@ test('page live sends changed desk and work as one snapshot, not CDC chunks', as
   assert.ok(workFrame)
   assert.ok(chunks.indexOf(deskFrame) < chunks.indexOf(workFrame))
   assert.equal(deskFrame.includes('"work"'), false)
-  assert.equal(chunks.some(chunk => chunk.startsWith('event: delta')), false)
+  assert.equal(
+    chunks.some(chunk => chunk.startsWith('event: delta')),
+    false,
+  )
   stamp = '1'
   close()
   await pending
@@ -131,34 +172,50 @@ test('a later live frame carries only the fields that changed', async () => {
   const board = {
     signals: { 'bot-a': ['ready'] },
     cards: {
-      owner: [{
-        summary: 'KEEP-SUMMARY',
-        ticket: { id: 't1', status: 'ready' },
-        events: [
-          { event_id: 'e1', text: 'OLD-RESULT' },
-          { event_id: 'e2', text: 'KEEP-PROGRESS' },
-        ],
-      }],
+      owner: [
+        {
+          summary: 'KEEP-SUMMARY',
+          ticket: { id: 't1', status: 'ready' },
+          events: [
+            { event_id: 'e1', text: 'OLD-RESULT' },
+            { event_id: 'e2', text: 'KEEP-PROGRESS' },
+          ],
+        },
+      ],
     },
   }
-  const chunks : any[] = []
+  const chunks: any[] = []
   let close = () => {}
-  const pending = openPageLive({
-    socket: { setTimeout() {} },
-    on(event: any, fn: any) { if (event === 'close') close = fn },
-  }, {
-    writableEnded: false,
-    writeHead() {},
-    write(chunk: any) { chunks.push(String(chunk)); return true },
-    end() { this.writableEnded = true },
-    on() {},
-  }, {
-    workStamp: () => stamp,
-    workBoard: () => board,
-    loadDesk: async () => ({ sessions: { previews: { a: 'desk-stays' } } }),
-    deskIntervalMs: 60_000,
-    intervalMs: 20,
-  })
+  let ended = false
+  const pending = openPageLive(
+    {
+      socket: { setTimeout() {} },
+      on(event: any, fn: any) {
+        if (event === 'close') close = fn
+      },
+    },
+    {
+      get writableEnded() {
+        return ended
+      },
+      writeHead() {},
+      write(chunk: any) {
+        chunks.push(String(chunk))
+        return true
+      },
+      end() {
+        ended = true
+      },
+      on() {},
+    },
+    {
+      workStamp: () => stamp,
+      workBoard: () => board,
+      loadDesk: async () => ({ sessions: { previews: { a: 'desk-stays' } } }),
+      deskIntervalMs: 60_000,
+      intervalMs: 20,
+    },
+  )
   await new Promise(resolve => setImmediate(resolve))
   stamp = '2'
   board.cards.owner[0].ticket.status = 'delivered'

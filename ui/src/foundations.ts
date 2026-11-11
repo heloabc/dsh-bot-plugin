@@ -9,7 +9,7 @@ export async function foundations(path: string, options?: RequestInit): Promise<
     headers: { accept: 'application/json', ...(options?.headers ?? {}) },
   })
   const body = await response.json().catch(() => ({}))
-  return { status: response.status, body: body && typeof body === 'object' ? body as Record<string, unknown> : {} }
+  return { status: response.status, body: body && typeof body === 'object' ? (body as Record<string, unknown>) : {} }
 }
 
 export interface SessionSetup {
@@ -47,7 +47,7 @@ const STYLE_LINE = /^(?:Style|风格)\s*[:：]\s*(.+?)\s*$/i
 const TASK_LINE = /^(?:Task|任务)\s*[:：]\s*(.+?)\s*$/i
 
 /** A leading `Name:` line is the assistant's name. A legacy CJK name label still counts. */
-export function splitPersona(text: string): { name: string, body: string } {
+export function splitPersona(text: string): { name: string; body: string } {
   const trimmed = text.trim()
   if (trimmed === '') return { name: '', body: '' }
   const lines = trimmed.split('\n')
@@ -66,7 +66,7 @@ export function composeBotPersona(name: string, style: string, task: string): st
 }
 
 /** Read the three bot lines back out of a stored persona. */
-export function botFields(text: string): { name: string, style: string, task: string } {
+export function botFields(text: string): { name: string; style: string; task: string } {
   const fields = { name: '', style: '', task: '' }
   for (const line of text.split('\n')) {
     const name = NAME_LINE.exec(line)

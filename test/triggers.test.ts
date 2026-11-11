@@ -17,7 +17,7 @@ test('cron uses Asia/Shanghai wall time', () => {
 test('acl, native push, idempotency, hop, webhook, timer', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'sf-triggers-'))
   const store = openStore(dir)
-  const pushed : any[] = []
+  const pushed: any[] = []
   const present = new Set()
   const triggers = createTriggers(store, {
     maxHop: 2,
@@ -33,60 +33,77 @@ test('acl, native push, idempotency, hop, webhook, timer', async () => {
 
   const stamp = new Date().toISOString()
   for (const id of ['session-a', 'session-b']) {
-    store.db.prepare(`
+    store.db
+      .prepare(`
       INSERT INTO session_bindings (
         session_id, kind, status, schema_version, fork_seeded, last_view_revision, compaction_epoch, created_at, updated_at
       ) VALUES (?, 'bot', 'active', 1, 0, 0, 0, ?, ?)
-    `).run(id, stamp, stamp)
+    `)
+      .run(id, stamp, stamp)
   }
 
-  const sent = field(await triggers.send('session-a', {
-    targetSessionId: 'session-b',
-    text: 'relay',
-    idempotencyKey: 'm1',
-    sessionId: 'session-forged',
-  }), 'deliveryId')
+  const sent = field(
+    await triggers.send('session-a', {
+      targetSessionId: 'session-b',
+      text: 'relay',
+      idempotencyKey: 'm1',
+      sessionId: 'session-forged',
+    }),
+    'deliveryId',
+  )
   assert.equal(sent.status, 'accepted')
   assert.equal(pushed.length, 1)
   assert.equal(pushed[0].sessionId, 'session-b')
   assert.match(pushed[0].text, /from: session-a/)
   assert.doesNotMatch(pushed[0].text, /session-forged/)
   assert.equal(pushed[0].text.split('\n---\n')[1], 'relay')
-  const again = field(await triggers.send('session-a', {
-    targetSessionId: 'session-b',
-    text: 'relay',
-    idempotencyKey: 'm1',
-  }), 'deliveryId')
+  const again = field(
+    await triggers.send('session-a', {
+      targetSessionId: 'session-b',
+      text: 'relay',
+      idempotencyKey: 'm1',
+    }),
+    'deliveryId',
+  )
   assert.equal(again.deliveryId, sent.deliveryId)
   assert.equal(pushed.length, 1)
 
   assert.equal(triggers.deny('session-b', 'session-a').ok, true)
-  const denied = field(await triggers.send('session-a', {
-    targetSessionId: 'session-b',
-    text: 'no',
-    idempotencyKey: 'm-denied',
-  }), 'code')
+  const denied = field(
+    await triggers.send('session-a', {
+      targetSessionId: 'session-b',
+      text: 'no',
+      idempotencyKey: 'm-denied',
+    }),
+    'code',
+  )
   assert.equal(denied.code, 'FORBIDDEN')
   assert.equal(pushed.length, 1)
   assert.equal(triggers.allow('session-b', 'session-a').ok, true)
 
   triggers.observeClaimed('session-b', sent.deliveryId, 1)
   triggers.observeUserMessage('session-b', sent.deliveryId, null)
-  const reply = field(await triggers.reply('session-b', {
-    correlationId: sent.correlationId,
-    text: 'relay',
-    idempotencyKey: 'r1',
-    targetSessionId: 'session-forged',
-  }), 'hop')
+  const reply = field(
+    await triggers.reply('session-b', {
+      correlationId: sent.correlationId,
+      text: 'relay',
+      idempotencyKey: 'r1',
+      targetSessionId: 'session-forged',
+    }),
+    'hop',
+  )
   assert.equal(reply.hop, 2)
   assert.equal(pushed[1].sessionId, 'session-a')
   triggers.observeClaimed('session-a', reply.deliveryId, 2)
   triggers.observeUserMessage('session-a', reply.deliveryId, null)
-  const stopped = field(await triggers.reply('session-a', {
-    correlationId: sent.correlationId,
-    text: 'relay',
-    idempotencyKey: 'r2',
-  }), 'code')
+  const stopped = field(
+    await triggers.reply('session-a', {
+      correlationId: sent.correlationId,
+      text: 'relay',
+      idempotencyKey: 'r2',
+    }),
+    'code',
+  )
   assert.equal(stopped.code, 'HOP_LIMIT')
   assert.equal(pushed.length, 2)
 
@@ -95,7 +112,9 @@ test('acl, native push, idempotency, hop, webhook, timer', async () => {
   const secret = readFileSync(hook.hook.secretFile, 'utf8')
   const raw = Buffer.from('{"n":1}')
   const timestamp = String(Math.floor(Date.parse('2026-11-08T00:00:00.000Z') / 1000))
-  const signature = createHmac('sha256', secret).update(`${timestamp}.${raw.toString('utf8')}`).digest('hex')
+  const signature = createHmac('sha256', secret)
+    .update(`${timestamp}.${raw.toString('utf8')}`)
+    .digest('hex')
   const bad = await triggers.acceptWebhook(hook.hook.id, raw, { timestamp, signature: '00', eventId: 'e1' })
   assert.equal(bad.http, 401)
   const expired = await triggers.acceptWebhook(hook.hook.id, raw, {
@@ -133,7 +152,10 @@ test('acl, native push, idempotency, hop, webhook, timer', async () => {
   assert.equal(row.status, 'accepted')
 
   store.db.prepare(`UPDATE deliveries SET status = 'completed' WHERE status IN ('claimed','started')`).run()
-  const held = field(await triggers.send('session-a', { targetSessionId: 'session-b', text: 'hold', idempotencyKey: 'hold-1' }), 'deliveryId')
+  const held = field(
+    await triggers.send('session-a', { targetSessionId: 'session-b', text: 'hold', idempotencyKey: 'hold-1' }),
+    'deliveryId',
+  )
   assert.equal(held.status, 'accepted')
   store.db.prepare(`UPDATE deliveries SET status = 'ambiguous', flush_pid = 42 WHERE id = ?`).run(held.deliveryId)
   present.delete(held.deliveryId)

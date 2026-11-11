@@ -10,20 +10,20 @@ import { handleWorkApi } from './work-http.ts'
  * Loopback mock of the native inbox. It is not the workbench and not a real DSH host.
  * @param {{ dataDir: string, port?: number, now?: () => Date }} options
  */
-export async function startWorkMock(options) {
+export async function startWorkMock(options: { dataDir: string; port?: number; now?: () => Date }) {
   const store = openStore(options.dataDir)
   const engine = createEngine(store)
   const world = createMockWorld()
   const clock = { ms: Date.now() }
   const now = options.now ?? (() => new Date(clock.ms))
   const work = createWorkRuntime(store, engine, {
-    createChild: (spec) => world.createChild(spec),
+    createChild: spec => world.createChild(spec),
     push: (sessionId, messageId, text) => world.push(sessionId, messageId, text),
     logHas: (sessionId, messageId) => world.logHas(sessionId, messageId),
     remove: (sessionId, messageId) => world.remove(sessionId, messageId),
-    pendingIds: (sessionId) => world.pendingIds(sessionId),
+    pendingIds: sessionId => world.pendingIds(sessionId),
     cancel: (sessionId, cancelOptions) => world.cancel(sessionId, cancelOptions),
-    snapshot: (sessionId) => world.snapshot(sessionId),
+    snapshot: sessionId => world.snapshot(sessionId),
     now,
     pid: process.pid,
   })
@@ -65,7 +65,11 @@ export async function startWorkMock(options) {
         return
       }
       if (req.method === 'POST' && path === '/session-foundations/api/work/mock/turn-end') {
-        const event = world.endTurn(String(body.sessionId), Number(body.turn ?? 1), String(body.reasonKind ?? 'completed'))
+        const event = world.endTurn(
+          String(body.sessionId),
+          Number(body.turn ?? 1),
+          String(body.reasonKind ?? 'completed'),
+        )
         work.observeSession(String(body.sessionId), event)
         send(res, 200, { ok: true, ticketStatus: statusOf(work, body.ticketId) })
         return
@@ -113,20 +117,25 @@ export async function startWorkMock(options) {
   return {
     port,
     origin: `http://127.0.0.1:${port}`,
-    close: () => new Promise<void>(resolve => {
-      server.close(() => {
-        try { store.close() } catch { /* closed */ }
-        resolve()
-      })
-    }),
+    close: () =>
+      new Promise<void>(resolve => {
+        server.close(() => {
+          try {
+            store.close()
+          } catch {
+            /* closed */
+          }
+          resolve()
+        })
+      }),
   }
 }
 
 /**
- * @param {ReturnType<import('./work-worker.js').createWorkRuntime>} work
+ * @param {ReturnType<typeof import('./work-worker.js').createWorkRuntime>} work
  * @param {unknown} ticketId
  */
-function statusOf(work, ticketId) {
+function statusOf(work: ReturnType<typeof import('./work-worker.ts').createWorkRuntime>, ticketId: unknown) {
   if (typeof ticketId !== 'string' || ticketId === '') return null
   return work.detail(ticketId)?.ticket.status ?? null
 }
@@ -136,7 +145,7 @@ function statusOf(work, ticketId) {
  * @param {number} status
  * @param {unknown} body
  */
-function send(res, status, body) {
+function send(res: import('node:http').ServerResponse, status: number, body: unknown) {
   const text = JSON.stringify(body)
   res.writeHead(status, {
     'content-type': 'application/json; charset=utf-8',
@@ -149,17 +158,21 @@ function send(res, status, body) {
 /**
  * @param {import('node:http').IncomingMessage} req
  */
-function readJson(req): Promise<any> {
+function readJson(req: import('node:http').IncomingMessage): Promise<any> {
   return new Promise((resolve, reject) => {
-    const chunks = []
-    req.on('data', chunk => chunks.push(chunk))
+    const chunks: any[] = []
+    req.on('data', (chunk: any) => chunks.push(chunk))
     req.on('end', () => {
       const raw = Buffer.concat(chunks).toString('utf8')
       if (raw === '') {
         resolve({})
         return
       }
-      try { resolve(JSON.parse(raw)) } catch (error) { reject(error) }
+      try {
+        resolve(JSON.parse(raw))
+      } catch (error) {
+        reject(error)
+      }
     })
     req.on('error', reject)
   })

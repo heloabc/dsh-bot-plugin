@@ -1,4 +1,16 @@
-import { closeSync, constants, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, readSync, realpathSync, renameSync, writeSync } from 'node:fs'
+import {
+  closeSync,
+  constants,
+  fsyncSync,
+  lstatSync,
+  mkdirSync,
+  openSync,
+  readFileSync,
+  readSync,
+  realpathSync,
+  renameSync,
+  writeSync,
+} from 'node:fs'
 import { basename, dirname, join, relative, sep } from 'node:path'
 import { createHash, randomBytes } from 'node:crypto'
 
@@ -7,14 +19,14 @@ const OPEN_FLAGS = constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0)
 /**
  * @param {Buffer | string} bytes
  */
-export function sha256(bytes) {
+export function sha256(bytes: Buffer | string) {
   return createHash('sha256').update(bytes).digest('hex')
 }
 
 /**
  * @param {string} root
  */
-export function ensureDir(root) {
+export function ensureDir(root: string) {
   mkdirSync(root, { recursive: true, mode: 0o700 })
   return realpathSync(root)
 }
@@ -26,7 +38,7 @@ export function ensureDir(root) {
  * @param {string} root
  * @param {string} file
  */
-export function openContained(root, file) {
+export function openContained(root: string, file: string) {
   const rootReal = realpathSync(root)
   const rel = relative(rootReal, file)
   if (rel.startsWith('..') || rel === '' || file.includes('\0')) {
@@ -62,7 +74,7 @@ export function openContained(root, file) {
  * @param {string} root
  * @param {string} file
  */
-export function readContained(root, file) {
+export function readContained(root: string, file: string) {
   const opened = openContained(root, file)
   try {
     const chunks = []
@@ -85,7 +97,7 @@ export function readContained(root, file) {
  * @param {string} file
  * @param {Buffer | string} bytes
  */
-export function writeAtomic(file, bytes) {
+export function writeAtomic(file: string, bytes: Buffer | string) {
   const data = Buffer.isBuffer(bytes) ? bytes : Buffer.from(bytes)
   const tmp = `${file}.${randomBytes(6).toString('hex')}.tmp`
   const fd = openSync(tmp, 'w', 0o600)

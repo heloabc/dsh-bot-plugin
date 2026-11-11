@@ -43,7 +43,7 @@ test('inserting one byte keeps the chunk hashes outside that edit', () => {
   }
   const data2 = new Uint8Array(data1.length + 1)
   data2.set(data1.subarray(0, 50000), 0)
-  data2[50000] = 0xAA
+  data2[50000] = 0xaa
   data2.set(data1.subarray(50000), 50001)
 
   const plan1 = planChunks(data1)

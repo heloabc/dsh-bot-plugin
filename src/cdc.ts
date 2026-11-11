@@ -55,7 +55,12 @@ export function chunkBuffer(data: Uint8Array): ChunkSpan[] {
 }
 
 /** Content-addressed cut of one buffer. The epoch is the hash of the ordered chunk hashes. */
-export function planChunks(data: Uint8Array): { epoch: string, hashes: string[], chunks: Map<string, Buffer>, totalSize: number } {
+export function planChunks(data: Uint8Array): {
+  epoch: string
+  hashes: string[]
+  chunks: Map<string, Buffer>
+  totalSize: number
+} {
   const parts = chunkBuffer(data)
   const hashes: string[] = []
   const chunks = new Map<string, Buffer>()

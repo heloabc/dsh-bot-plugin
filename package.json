@@ -30,14 +30,18 @@
   },
   "scripts": {
     "build": "node build.mjs",
-    "type-check": "tsc -p tsconfig.typecheck.json --noEmit && node type-check-tests.mjs",
-    "test": "node --test test/store.test.ts test/skills.test.ts test/context.test.ts test/tools.test.ts test/triggers.test.ts test/provision.test.ts test/inbox-read.test.ts test/work.test.ts test/work-eval.test.ts test/router.test.ts test/desk.test.ts test/session-files.test.ts test/session-previews.test.ts test/cdc.test.ts test/live-diff.test.ts test/live-snapshot.test.ts ui/src/live.test.ts ui/src/follow.test.ts ui/src/work.test.ts ui/src/session-snapshot.test.ts",
-    "test:host": "npm run build && node --test test/host-integration.test.ts && node --test test/triggers-host.test.ts"
+    "type-check": "tsc -p tsconfig.typecheck.json --noEmit && tsc -p tsconfig.client.json --noEmit",
+    "test": "node scripts/unit-tests.mjs",
+    "test:host": "npm run build && node --test test/host-integration.test.ts && node --test test/triggers-host.test.ts",
+    "format": "biome format --write src test ui/src client.js scripts",
+    "format:check": "biome check src test ui/src client.js scripts"
   },
   "engines": {
     "node": ">=22.18.0"
   },
   "devDependencies": {
+    "@biomejs/biome": "^2.6.6",
+    "@deepseek-ai/cordis": "~4.1.0",
     "@types/node": "^24.10.0",
     "esbuild": "^0.25.0",
     "typescript": "^5.9.3"

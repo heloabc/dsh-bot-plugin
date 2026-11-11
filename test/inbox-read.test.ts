@@ -6,7 +6,14 @@ test('a log read uses the stored session and does not resume an agent', async ()
   let resumed = 0
   let closed = 0
   const ctx = {
-    agents: { get() { return undefined }, resume() { resumed += 1 } },
+    agents: {
+      get() {
+        return undefined
+      },
+      resume() {
+        resumed += 1
+      },
+    },
     sessionPersistence: {
       async open(id: any, access: any) {
         assert.equal(id, 'worker-1')
@@ -15,7 +22,9 @@ test('a log read uses the stored session and does not resume an agent', async ()
           async read() {
             return { events: [{ type: 'user/message', seq: 1, data: { id: 'm1' } }] }
           },
-          async close() { closed += 1 },
+          async close() {
+            closed += 1
+          },
         }
       },
     },
@@ -36,7 +45,11 @@ test('an already entered agent is read in place', async () => {
         return { session: { snapshotEvents: () => [{ type: 'turn/end', seq: 4 }] } }
       },
     },
-    sessionPersistence: { async open() { opened += 1 } },
+    sessionPersistence: {
+      async open() {
+        opened += 1
+      },
+    },
   }
   const events = await sessionEvents(ctx, 'session-a')
   assert.deepEqual(events, [{ type: 'turn/end', seq: 4 }])
@@ -48,9 +61,15 @@ test('a missing stored session is an empty log', async () => {
   const missing = new Error('missing')
   missing.name = 'SessionPersistenceNotFoundError'
   const ctx = {
-    agents: { get() { return undefined } },
+    agents: {
+      get() {
+        return undefined
+      },
+    },
     sessionPersistence: {
-      async open() { throw missing },
+      async open() {
+        throw missing
+      },
     },
   }
   assert.deepEqual(await sessionEvents(ctx, 'session-gone'), [])

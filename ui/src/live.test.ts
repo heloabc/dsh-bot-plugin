@@ -17,7 +17,10 @@ test('ordered chunks assemble, a hole does not, and stale chunks are dropped', (
     ['b', bytes.slice(mid)],
   ])
   const body = assembleDocument(['a', 'b'], chunks, bytes.length)
-  const doc = body !== null && typeof body === 'object' && !Array.isArray(body) ? body as { ok?: unknown, desk?: unknown } : null
+  const doc =
+    body !== null && typeof body === 'object' && !Array.isArray(body)
+      ? (body as { ok?: unknown; desk?: unknown })
+      : null
   assert.equal(doc?.ok, true)
   assert.deepEqual(doc?.desk, { n: 1 })
   assert.equal(assembleDocument(['a', 'c'], chunks, bytes.length), null)

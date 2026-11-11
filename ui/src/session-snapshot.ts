@@ -2,7 +2,10 @@ import { cachedEvent, type CachedEvent, type ChunkCache } from './cache.ts'
 import { assembleDocument, hashBatches, hashList, mergeChunkBodies, missingHashes } from './live.ts'
 
 interface JsonGet {
-  (path: string, onBytes?: (received: number, total: number | null) => void): Promise<{ status: number, body: Record<string, unknown> }>
+  (
+    path: string,
+    onBytes?: (received: number, total: number | null) => void,
+  ): Promise<{ status: number; body: Record<string, unknown> }>
 }
 
 export interface ChunkProgress {
@@ -35,12 +38,23 @@ function prefixRows(rows: CachedEvent[], beforeSeq: number | null): CachedEvent[
  * Hashes already in the cache are not requested. An empty prefix returns no chunk calls.
  * When the event cache already holds every prefix event, the chunk bodies stay put and no load progress is reported.
  */
-export async function loadSessionSnapshot(sessionId: string, cache: ChunkCache, get: JsonGet, onProgress?: (progress: ChunkProgress) => void, attempt = 0, beforeSeq?: number, tailMessages?: number): Promise<SessionSnapshot> {
-  const scope = beforeSeq != null && beforeSeq > 0
-    ? `&beforeSeq=${beforeSeq}`
-    : tailMessages != null && tailMessages > 0 ? `&tailMessages=${tailMessages}` : ''
+export async function loadSessionSnapshot(
+  sessionId: string,
+  cache: ChunkCache,
+  get: JsonGet,
+  onProgress?: (progress: ChunkProgress) => void,
+  attempt = 0,
+  beforeSeq?: number,
+  tailMessages?: number,
+): Promise<SessionSnapshot> {
+  const scope =
+    beforeSeq != null && beforeSeq > 0
+      ? `&beforeSeq=${beforeSeq}`
+      : tailMessages != null && tailMessages > 0
+        ? `&tailMessages=${tailMessages}`
+        : ''
   const listed = await get(`/snapshot?sessionId=${encodeURIComponent(sessionId)}${scope}`)
-  const reported = typeof listed.body.beforeSeq === 'number' ? listed.body.beforeSeq : beforeSeq ?? null
+  const reported = typeof listed.body.beforeSeq === 'number' ? listed.body.beforeSeq : (beforeSeq ?? null)
   if (listed.status !== 200 || listed.body.ok !== true) return { events: null, beforeSeq: reported }
   const hashes = hashList(listed.body.hashes)
   const totalSize = listed.body.totalSize
@@ -51,7 +65,9 @@ export async function loadSessionSnapshot(sessionId: string, cache: ChunkCache, 
       const stored = await cache.readEvents(sessionId)
       const prefix = prefixRows(stored, reported)
       if (prefix.length === count) return { events: prefix.map(row => row.event), beforeSeq: reported }
-    } catch { /* a cache read failure still falls through to the chunk plan */ }
+    } catch {
+      /* a cache read failure still falls through to the chunk plan */
+    }
   }
   if (hashes.length === 0) {
     onProgress?.({ loaded: 0, total: totalSize })
@@ -76,13 +92,18 @@ export async function loadSessionSnapshot(sessionId: string, cache: ChunkCache, 
     const query = batch.map(hash => `hash=${encodeURIComponent(hash)}`).join('&')
     const remaining = Math.max(0, totalSize - loaded)
     const share = pending === 0 ? 0 : remaining * (batch.length / pending)
-    const part = await get(`/snapshot/chunks?sessionId=${encodeURIComponent(sessionId)}&${query}`, (received, httpTotal) => {
-      const fraction = httpTotal != null && httpTotal > 0
-        ? Math.min(1, received / httpTotal)
-        : Math.min(0.9, received / Math.max(share, 1))
-      report(share * fraction)
-    })
-    if (part.status === 409 && attempt === 0) return loadSessionSnapshot(sessionId, cache, get, onProgress, 1, beforeSeq, tailMessages)
+    const part = await get(
+      `/snapshot/chunks?sessionId=${encodeURIComponent(sessionId)}&${query}`,
+      (received, httpTotal) => {
+        const fraction =
+          httpTotal != null && httpTotal > 0
+            ? Math.min(1, received / httpTotal)
+            : Math.min(0.9, received / Math.max(share, 1))
+        report(share * fraction)
+      },
+    )
+    if (part.status === 409 && attempt === 0)
+      return loadSessionSnapshot(sessionId, cache, get, onProgress, 1, beforeSeq, tailMessages)
     if (part.status !== 200 || part.body.ok !== true) return { events: null, beforeSeq: reported }
     const decoded = new Map<string, Uint8Array>()
     mergeChunkBodies(decoded, part.body.chunks)
@@ -101,7 +122,12 @@ export async function loadSessionSnapshot(sessionId: string, cache: ChunkCache, 
 }
 
 /** The few events between the CDC prefix and a follow page that started later. */
-export async function loadSessionRange(sessionId: string, fromSeq: number, beforeSeq: number | undefined, get: JsonGet): Promise<unknown[] | null> {
+export async function loadSessionRange(
+  sessionId: string,
+  fromSeq: number,
+  beforeSeq: number | undefined,
+  get: JsonGet,
+): Promise<unknown[] | null> {
   const upper = beforeSeq != null ? `&beforeSeq=${beforeSeq}` : ''
   const listed = await get(`/snapshot/range?sessionId=${encodeURIComponent(sessionId)}&fromSeq=${fromSeq}${upper}`)
   if (listed.status !== 200 || listed.body.ok !== true || !Array.isArray(listed.body.events)) return null

@@ -9,7 +9,7 @@ const SESSION_ID = /^session-[A-Za-z0-9-]+$/
  * Same project-directory key as @deepseek-ai/dsh-session-persistence-jsonl.
  * @param {string} cwd
  */
-export function projectKey(cwd) {
+export function projectKey(cwd: string) {
   if (cwd.length === 0) throw new Error('cannot encode an empty project path')
   let readable = ''
   let separatorRun = false
@@ -34,7 +34,7 @@ export function projectKey(cwd) {
  * @param {string} cwd
  * @param {string} sessionId
  */
-export function sessionDirectory(sessionsRoot, cwd, sessionId) {
+export function sessionDirectory(sessionsRoot: string, cwd: string, sessionId: string) {
   if (!SESSION_ID.test(sessionId)) throw new Error('session id is not a storage name')
   const root = resolve(sessionsRoot)
   const dir = resolve(root, projectKey(cwd), sessionId)
@@ -46,7 +46,7 @@ export function sessionDirectory(sessionsRoot, cwd, sessionId) {
  * @param {string} root
  * @param {string} target
  */
-function inside(root, target) {
+function inside(root: string, target: string) {
   const base = resolve(root)
   const file = resolve(target)
   return file === base || file.startsWith(base + sep)
@@ -57,19 +57,29 @@ function inside(root, target) {
  * this file is the mark you can see in the session directory.
  * @param {{ sessionsRoot: string, cwd: string, sessionId: string, name?: string }} input
  */
-export function writeBotMarker(input) {
+export function writeBotMarker(input: { sessionsRoot: string; cwd: string; sessionId: string; name?: string }) {
   const dir = sessionDirectory(input.sessionsRoot, input.cwd, input.sessionId)
   mkdirSync(dir, { recursive: true, mode: 0o700 })
   const file = join(dir, 'bot.json')
   const name = typeof input.name === 'string' ? input.name.trim() : ''
-  writeFileSync(file, `${JSON.stringify({ kind: 'bot', sessionId: input.sessionId, ...(name ? { name } : {}) }, null, 2)}\n`, { mode: 0o644 })
+  writeFileSync(
+    file,
+    `${JSON.stringify({ kind: 'bot', sessionId: input.sessionId, ...(name ? { name } : {}) }, null, 2)}\n`,
+    { mode: 0o644 },
+  )
   return file
 }
 
 /**
  * @param {{ sessionsRoot: string, cacheFile: string, workspaceFile: string, sessionId: string, cwd: string }} input
  */
-export function purgeSessionFiles(input) {
+export function purgeSessionFiles(input: {
+  sessionsRoot: string
+  cacheFile: string
+  workspaceFile: string
+  sessionId: string
+  cwd: string
+}) {
   const dir = sessionDirectory(input.sessionsRoot, input.cwd, input.sessionId)
   if (existsSync(dir)) {
     if (lstatSync(dir).isSymbolicLink()) throw new Error('refusing to delete a symlink')
@@ -88,11 +98,11 @@ export function purgeSessionFiles(input) {
  * @param {string} workspaceFile
  * @param {string} sessionId
  */
-export function forgetWorkspaceId(workspaceFile, sessionId) {
+export function forgetWorkspaceId(workspaceFile: string, sessionId: string) {
   if (!existsSync(workspaceFile)) return
   const data = JSON.parse(readFileSync(workspaceFile, 'utf8'))
   if (data?.global && Array.isArray(data.global.archivedSessionIds)) {
-    data.global.archivedSessionIds = data.global.archivedSessionIds.filter(id => id !== sessionId)
+    data.global.archivedSessionIds = data.global.archivedSessionIds.filter((id: string) => id !== sessionId)
   }
   const workspaces = data?.tables?.workspaces
   if (workspaces && typeof workspaces === 'object') {

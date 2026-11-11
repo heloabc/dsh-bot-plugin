@@ -16,7 +16,11 @@ export function mergeChunkBodies(chunks: Map<string, Uint8Array>, incoming: unkn
   if (!incoming || typeof incoming !== 'object' || Array.isArray(incoming)) return
   for (const [hash, value] of Object.entries(incoming)) {
     if (typeof value !== 'string' || value === '') continue
-    try { chunks.set(hash, decodeChunk(value)) } catch { /* a bad body is a hole; assembly fails closed */ }
+    try {
+      chunks.set(hash, decodeChunk(value))
+    } catch {
+      /* a bad body is a hole; assembly fails closed */
+    }
   }
 }
 
@@ -25,7 +29,11 @@ export function retainChunks(chunks: Map<string, Uint8Array>, hashes: readonly s
   for (const hash of chunks.keys()) if (!keep.has(hash)) chunks.delete(hash)
 }
 
-export function assembleDocument(hashes: readonly string[], chunks: ReadonlyMap<string, Uint8Array>, totalSize?: number): unknown | null {
+export function assembleDocument(
+  hashes: readonly string[],
+  chunks: ReadonlyMap<string, Uint8Array>,
+  totalSize?: number,
+): unknown | null {
   let size = 0
   const parts: Uint8Array[] = []
   for (const hash of hashes) {

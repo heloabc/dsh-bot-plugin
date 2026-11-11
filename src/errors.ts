@@ -24,13 +24,22 @@ export const CODES = [
 const RETRYABLE = new Set(['BUSY'])
 
 /**
+ * Tool and HTTP results are open records. Callers read whichever fields the
+ * success or failure path actually returned.
+ */
+export type ToolPayload = {
+  ok: boolean
+  [key: string]: any
+}
+
+/**
  * @param {string} code
  * @param {string} message
  * @param {Record<string, unknown>} [details]
  */
-export function toolError(code, message, details?) {
+export function toolError(code: string, message: string, details?: Record<string, unknown>): ToolPayload {
   return {
-    ok: false as const,
+    ok: false,
     code,
     message,
     retryable: code === 'CAS_CONFLICT' ? true : RETRYABLE.has(code),
@@ -41,7 +50,7 @@ export function toolError(code, message, details?) {
 /**
  * @param {unknown} error
  */
-export function asStoreFailure(error) {
+export function asStoreFailure(error: unknown) {
   const message = error instanceof Error ? error.message : String(error)
   if (message.includes('SQLITE_BUSY') || message.includes('database is locked')) {
     return toolError('BUSY', 'The write lock was not acquired, so nothing was written.')

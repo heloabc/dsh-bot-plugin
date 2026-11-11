@@ -9,7 +9,12 @@ import { sha256 } from './fs-safe.ts'
 /**
  * @param {{ text: string, revision: number, budget: { wallMs?: number, maxTokens?: number }, kind?: string }} input
  */
-export function renderBriefing(input) {
+export function renderBriefing(input: {
+  text: string
+  revision: number
+  budget: { wallMs?: number; maxTokens?: number }
+  kind?: string
+}) {
   const material = sha256(input.text)
   const lines = [
     '[foundations:briefing]',
@@ -41,7 +46,7 @@ export function renderBriefing(input) {
 /**
  * @param {string[]} lines
  */
-export function renderNotice(lines) {
+export function renderNotice(lines: string[]) {
   return [
     '[foundations:ticket]',
     'This is a ticket notice, not something the user said, and not the final reply.',
@@ -51,7 +56,7 @@ export function renderNotice(lines) {
 }
 
 /**
- * @param {ReturnType<import('./work-tickets.js').createTicketBook>} book
+ * @param {ReturnType<typeof import('./work-tickets.js').createTicketBook>} book
  * @param {{
  *   pid: number,
  *   inflight: Set<string>,
@@ -59,7 +64,19 @@ export function renderNotice(lines) {
  *   push: (sessionId: string, messageId: string, text: string) => Promise<{ ok?: boolean, ambiguous?: boolean, seq?: number | null, error?: string }>,
  * }} deps
  */
-export async function reconcileInputs(book, deps) {
+export async function reconcileInputs(
+  book: ReturnType<typeof import('./work-tickets.ts').createTicketBook>,
+  deps: {
+    pid: number
+    inflight: Set<string>
+    logHas: (sessionId: string, messageId: string) => Promise<boolean>
+    push: (
+      sessionId: string,
+      messageId: string,
+      text: string,
+    ) => Promise<{ ok?: boolean; ambiguous?: boolean; seq?: number | null; error?: string }>
+  },
+) {
   for (const input of book.flushInputs()) {
     if (deps.inflight.has(input.native_message_id)) continue
     const attempt = book.attempt(input.attempt_id)
@@ -78,13 +95,14 @@ export async function reconcileInputs(book, deps) {
       book.markInputFlush(input.id, 'dead', input.flush_pid ?? null, 'retry-limit', null, false)
       continue
     }
-    if ((input.flush_status === 'ambiguous' || input.flush_status === 'flushing') && input.flush_pid === deps.pid) continue
+    if ((input.flush_status === 'ambiguous' || input.flush_status === 'flushing') && input.flush_pid === deps.pid)
+      continue
     await pushInput(book, input, deps)
   }
 }
 
 /**
- * @param {ReturnType<import('./work-tickets.js').createTicketBook>} book
+ * @param {ReturnType<typeof import('./work-tickets.js').createTicketBook>} book
  * @param {{
  *   pid: number,
  *   inflight: Set<string>,
@@ -93,9 +111,22 @@ export async function reconcileInputs(book, deps) {
  *   noticeText: (nativeId: string) => string,
  * }} deps
  */
-export async function reconcileNotices(book, deps) {
+export async function reconcileNotices(
+  book: ReturnType<typeof import('./work-tickets.ts').createTicketBook>,
+  deps: {
+    pid: number
+    inflight: Set<string>
+    logHas: (sessionId: string, messageId: string) => Promise<boolean>
+    push: (
+      sessionId: string,
+      messageId: string,
+      text: string,
+    ) => Promise<{ ok?: boolean; ambiguous?: boolean; seq?: number | null; error?: string }>
+    noticeText: (nativeId: string) => string
+  },
+) {
   /** @type {Map<string, any[]>} */
-  const groups = new Map()
+  const groups: Map<string, any[]> = new Map()
   for (const notice of book.flushNotices()) {
     const list = groups.get(notice.native_message_id) ?? []
     list.push(notice)
@@ -118,13 +149,18 @@ export async function reconcileNotices(book, deps) {
       book.markNoticeGroup(nativeId, 'dead', sample.flush_pid ?? null, 'retry-limit', null, false)
       continue
     }
-    if (rows.some(row => (row.flush_status === 'ambiguous' || row.flush_status === 'flushing') && row.flush_pid === deps.pid)) continue
+    if (
+      rows.some(
+        row => (row.flush_status === 'ambiguous' || row.flush_status === 'flushing') && row.flush_pid === deps.pid,
+      )
+    )
+      continue
     await pushNotice(book, nativeId, sample.owner_session_id, deps.noticeText(nativeId), attempts, deps)
   }
 }
 
 /**
- * @param {ReturnType<import('./work-tickets.js').createTicketBook>} book
+ * @param {ReturnType<typeof import('./work-tickets.js').createTicketBook>} book
  * @param {Record<string, any>} input
  * @param {{
  *   pid: number,
@@ -132,12 +168,28 @@ export async function reconcileNotices(book, deps) {
  *   push: (sessionId: string, messageId: string, text: string) => Promise<{ ok?: boolean, ambiguous?: boolean, seq?: number | null, error?: string }>,
  * }} deps
  */
-export async function pushInput(book, input, deps) {
+export async function pushInput(
+  book: ReturnType<typeof import('./work-tickets.ts').createTicketBook>,
+  input: Record<string, any>,
+  deps: {
+    pid: number
+    inflight: Set<string>
+    push: (
+      sessionId: string,
+      messageId: string,
+      text: string,
+    ) => Promise<{ ok?: boolean; ambiguous?: boolean; seq?: number | null; error?: string }>
+  },
+) {
   const attempt = book.attempt(input.attempt_id)
   const ticket = book.ticket(input.ticket_id)
   if (!attempt?.child_session_id || !ticket) return { ok: false, status: 'pending' }
   let budget = { wallMs: 600_000, maxTokens: 400_000 }
-  try { budget = { ...budget, ...JSON.parse(ticket.budget_json) } } catch { /* host default */ }
+  try {
+    budget = { ...budget, ...JSON.parse(ticket.budget_json) }
+  } catch {
+    /* host default */
+  }
   const text = book.readBriefing(input.payload_hash)
   const body = renderBriefing({ text, revision: input.briefing_revision, budget, kind: input.kind })
   deps.inflight.add(input.native_message_id)
@@ -146,10 +198,10 @@ export async function pushInput(book, input, deps) {
       attempts: input.flush_attempts,
       markFlushing: () => book.markInputFlush(input.id, 'flushing', deps.pid, '', null, true),
       push: () => deps.push(attempt.child_session_id, input.native_message_id, body),
-      markAccepted: (seq) => book.noteInputAccepted(input, seq),
-      markAmbiguous: (error) => book.markInputFlush(input.id, 'ambiguous', deps.pid, error, null, false),
-      markDead: (error) => book.markInputFlush(input.id, 'dead', deps.pid, error, null, false),
-      markRetry: (error) => book.markInputFlush(input.id, 'intent', deps.pid, error, null, false),
+      markAccepted: seq => book.noteInputAccepted(input, seq),
+      markAmbiguous: error => book.markInputFlush(input.id, 'ambiguous', deps.pid, error, null, false),
+      markDead: error => book.markInputFlush(input.id, 'dead', deps.pid, error, null, false),
+      markRetry: error => book.markInputFlush(input.id, 'intent', deps.pid, error, null, false),
     })
   } finally {
     deps.inflight.delete(input.native_message_id)
@@ -157,7 +209,7 @@ export async function pushInput(book, input, deps) {
 }
 
 /**
- * @param {ReturnType<import('./work-tickets.js').createTicketBook>} book
+ * @param {ReturnType<typeof import('./work-tickets.js').createTicketBook>} book
  * @param {string} nativeId
  * @param {string} owner
  * @param {string} text
@@ -168,17 +220,32 @@ export async function pushInput(book, input, deps) {
  *   push: (sessionId: string, messageId: string, text: string) => Promise<{ ok?: boolean, ambiguous?: boolean, seq?: number | null, error?: string }>,
  * }} deps
  */
-export async function pushNotice(book, nativeId, owner, text, attempts, deps) {
+export async function pushNotice(
+  book: ReturnType<typeof import('./work-tickets.ts').createTicketBook>,
+  nativeId: string,
+  owner: string,
+  text: string,
+  attempts: number,
+  deps: {
+    pid: number
+    inflight: Set<string>
+    push: (
+      sessionId: string,
+      messageId: string,
+      text: string,
+    ) => Promise<{ ok?: boolean; ambiguous?: boolean; seq?: number | null; error?: string }>
+  },
+) {
   deps.inflight.add(nativeId)
   try {
     return await durableFollowup({
       attempts,
       markFlushing: () => book.markNoticeGroup(nativeId, 'flushing', deps.pid, '', null, true),
       push: () => deps.push(owner, nativeId, text),
-      markAccepted: (seq) => book.markNoticeGroup(nativeId, 'accepted', deps.pid, '', seq, false),
-      markAmbiguous: (error) => book.markNoticeGroup(nativeId, 'ambiguous', deps.pid, error, null, false),
-      markDead: (error) => book.markNoticeGroup(nativeId, 'dead', deps.pid, error, null, false),
-      markRetry: (error) => book.markNoticeGroup(nativeId, 'intent', deps.pid, error, null, false),
+      markAccepted: seq => book.markNoticeGroup(nativeId, 'accepted', deps.pid, '', seq, false),
+      markAmbiguous: error => book.markNoticeGroup(nativeId, 'ambiguous', deps.pid, error, null, false),
+      markDead: error => book.markNoticeGroup(nativeId, 'dead', deps.pid, error, null, false),
+      markRetry: error => book.markNoticeGroup(nativeId, 'intent', deps.pid, error, null, false),
     })
   } finally {
     deps.inflight.delete(nativeId)
@@ -190,7 +257,11 @@ export async function pushNotice(book, nativeId, owner, text, attempts, deps) {
  * @param {string} sessionId
  * @param {string} messageId
  */
-async function readLog(deps, sessionId, messageId) {
+async function readLog(
+  deps: { logHas: (sessionId: string, messageId: string) => Promise<boolean> },
+  sessionId: string,
+  messageId: string,
+) {
   try {
     const found = await deps.logHas(sessionId, messageId)
     return { found: found === true, unreadable: false, seq: null }
@@ -202,14 +273,14 @@ async function readLog(deps, sessionId, messageId) {
 /**
  * @param {{ data?: { id?: string, message?: { id?: string } } }} event
  */
-export function messageIdOf(event) {
+export function messageIdOf(event: { data?: { id?: string; message?: { id?: string } } }) {
   return event?.data?.id ?? event?.data?.message?.id ?? ''
 }
 
 /**
  * @param {{ data?: { reason?: { kind?: string } } }} event
  */
-export function reasonKindOf(event) {
+export function reasonKindOf(event: { data?: { reason?: { kind?: string } } }) {
   const reason = event?.data?.reason
-  return reason && typeof reason === 'object' ? reason.kind ?? '' : ''
+  return reason && typeof reason === 'object' ? (reason.kind ?? '') : ''
 }

@@ -18,7 +18,11 @@ test('a new session binds the latest persona and does not copy facts', async () 
   const persona = engine.confirmPersona('You are a brief assistant. Call the user Ada.')
   engine.markBot('session-old')
   engine.bindPersona('session-old', persona.id)
-  await provisionSession(engine, { sessionId: 'session-old', fact: 'The user is called Ada', idempotencyKey: 'old-fact' })
+  await provisionSession(engine, {
+    sessionId: 'session-old',
+    fact: 'The user is called Ada',
+    idempotencyKey: 'old-fact',
+  })
   engine.markBot('session-new')
   const opened = await provisionSession(engine, { sessionId: 'session-new' })
   assert.equal(opened.ok, true)
@@ -44,7 +48,10 @@ test('typed persona and fact land on the new session only', async () => {
   assert.equal(engine.binding('session-new').persona_version_id, engine.latestPersona().id)
   const body = store.readBlob('persona', engine.latestPersona().content_hash)!.toString('utf8')
   assert.equal(body, 'the new persona')
-  assert.equal(store.db.prepare('SELECT content FROM facts WHERE session_id = ?').get('session-new').content, 'The user is called Ada')
+  assert.equal(
+    store.db.prepare('SELECT content FROM facts WHERE session_id = ?').get('session-new').content,
+    'The user is called Ada',
+  )
   const replay = await provisionSession(engine, {
     sessionId: 'session-new',
     fact: 'The user is called Ada',

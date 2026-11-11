@@ -44,7 +44,10 @@ export function mainSegments(segments: readonly Segment[]): Segment[] {
 }
 
 /** Latest inbound mail, for the entry beside the main chat. */
-export function inboxSummary(items: readonly BotExchangeItem[], label: (sessionId: string) => string): InboxSummary | null {
+export function inboxSummary(
+  items: readonly BotExchangeItem[],
+  label: (sessionId: string) => string,
+): InboxSummary | null {
   const inbound = items.filter((item): item is Extract<BotExchangeItem, { kind: 'in' }> => item.kind === 'in')
   const latest = inbound.at(-1)
   if (!latest) return null
@@ -57,7 +60,10 @@ export function inboxSummary(items: readonly BotExchangeItem[], label: (sessionI
 }
 
 /** Who an outbound line was sent to. A reply borrows the earlier inbound sender. */
-export function outboundPeer(item: Extract<BotExchangeItem, { kind: 'out' }>, items: readonly BotExchangeItem[]): string {
+export function outboundPeer(
+  item: Extract<BotExchangeItem, { kind: 'out' }>,
+  items: readonly BotExchangeItem[],
+): string {
   if (item.target) return item.target
   if (!item.correlation) return ''
   for (let index = items.length - 1; index >= 0; index -= 1) {

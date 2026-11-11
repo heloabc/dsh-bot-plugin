@@ -53,7 +53,10 @@ State: the root already has files`)
   assert.equal(briefing?.maxTokens, null)
   assert.equal(briefing?.cancel, false)
   assert.equal(briefing?.body, 'Task: move the coffee project\nState: the root already has files')
-  assert.equal(briefing?.notes.some(note => note.startsWith('There is no step cap')), true)
+  assert.equal(
+    briefing?.notes.some(note => note.startsWith('There is no step cap')),
+    true,
+  )
   assert.equal(parseBriefing('tidy the notes'), null)
   const cancel = parseBriefing(`[foundations:briefing]
 briefing_revision: 2
@@ -71,12 +74,29 @@ test('a worker session is recognized by its id and is not a normal chat', () => 
 })
 
 test('a ticket detail keeps the question text and the start time', () => {
-  const read = readTicket({
-    ok: true,
-    ticket: { id: 't1', status: 'needs_user', briefing_revision: 1, active_attempt_id: 'a1', child_session_id: 'worker-t1' },
-    attempts: [{ id: 'a1', started_at: '2026-11-09T06:00:00.000Z' }],
-    events: [{ event_id: 'e1', kind: 'question', apply_status: 'applied', briefing_revision: 1, text: 'by topic or by time?' }],
-  }, 'tidy the notes')
+  const read = readTicket(
+    {
+      ok: true,
+      ticket: {
+        id: 't1',
+        status: 'needs_user',
+        briefing_revision: 1,
+        active_attempt_id: 'a1',
+        child_session_id: 'worker-t1',
+      },
+      attempts: [{ id: 'a1', started_at: '2026-11-09T06:00:00.000Z' }],
+      events: [
+        {
+          event_id: 'e1',
+          kind: 'question',
+          apply_status: 'applied',
+          briefing_revision: 1,
+          text: 'by topic or by time?',
+        },
+      ],
+    },
+    'tidy the notes',
+  )
   assert.ok(read)
   assert.equal(read.summary, 'tidy the notes')
   assert.equal(read.startedAt, '2026-11-09T06:00:00.000Z')
@@ -103,13 +123,19 @@ test('a ready ticket waits for the assistant reply instead of carrying the resul
     events: [{ eventId: 'e1', kind: 'result', applyStatus: 'applied', revision: 1, text: 'split into three topics' }],
   })
   assert.equal(workPreview([ready]), '')
-  assert.equal(workPlaceholder([ready]), 'Send a message. The result becomes delivered only after the assistant writes it into the chat.')
+  assert.equal(
+    workPlaceholder([ready]),
+    'Send a message. The result becomes delivered only after the assistant writes it into the chat.',
+  )
   assert.equal(botSignal([ready]), null)
   assert.equal(botSignal([{ status: 'started' }]), 'run')
   assert.equal(botSignal([{ status: 'enqueued' }, { status: 'needs_user' }]), 'wait')
   assert.equal(botSignal([{ status: 'needs_user' }], true), 'run')
   const delivered = ticket({ id: 't2', status: 'delivered' })
-  assert.deepEqual(cardsToShow([ready, delivered]).map(item => item.status), ['ready', 'delivered'])
+  assert.deepEqual(
+    cardsToShow([ready, delivered]).map(item => item.status),
+    ['ready', 'delivered'],
+  )
 })
 
 test('two running tickets share one preview, and a second dispatch can be refused', () => {
@@ -117,10 +143,20 @@ test('two running tickets share one preview, and a second dispatch can be refuse
   const second = ticket({ id: 'b', summary: 'check the list' })
   assert.equal(workPreview([first, second], Date.parse('2026-11-09T06:00:42.000Z')), 'Started · 2')
   assert.equal(workPlaceholder([first]), 'Background work has started. You can say something else.')
-  const refused = { name: 'foundations_dispatch', result: JSON.stringify({ ok: false, code: 'BUDGET', message: 'Unfinished tickets already hit the host concurrency limit, so no row was created.' }) }
+  const refused = {
+    name: 'foundations_dispatch',
+    result: JSON.stringify({
+      ok: false,
+      code: 'BUDGET',
+      message: 'Unfinished tickets already hit the host concurrency limit, so no row was created.',
+    }),
+  }
   assert.equal(isBudgetRefusal(refused), true)
   assert.match(budgetRefusalText(refused.result), /concurrency limit/)
-  assert.equal(dispatchTicketId({ name: 'foundations_dispatch', result: JSON.stringify({ ok: true, ticketId: 't1' }) }), 't1')
+  assert.equal(
+    dispatchTicketId({ name: 'foundations_dispatch', result: JSON.stringify({ ok: true, ticketId: 't1' }) }),
+    't1',
+  )
   assert.equal(dispatchTicketId(refused), null)
 })
 
@@ -144,12 +180,22 @@ test('a live snapshot becomes sidebar statuses and cards', () => {
   assert.deepEqual(signals['bot-a'], ['started'])
   assert.deepEqual(signals['bot-b'], [])
   const cards = readLiveCards({
-    cards: [{
-      summary: 'sort the attachments',
-      ticket: { id: 't1', status: 'started', briefing_revision: 2, child_session_id: 'worker-t1', active_attempt_id: 'a1' },
-      attempts: [{ id: 'a1', started_at: '2026-11-09T06:00:00.000Z' }],
-      events: [{ event_id: 'e1', kind: 'progress', apply_status: 'applied', briefing_revision: 2, text: 'halfway there' }],
-    }],
+    cards: [
+      {
+        summary: 'sort the attachments',
+        ticket: {
+          id: 't1',
+          status: 'started',
+          briefing_revision: 2,
+          child_session_id: 'worker-t1',
+          active_attempt_id: 'a1',
+        },
+        attempts: [{ id: 'a1', started_at: '2026-11-09T06:00:00.000Z' }],
+        events: [
+          { event_id: 'e1', kind: 'progress', apply_status: 'applied', briefing_revision: 2, text: 'halfway there' },
+        ],
+      },
+    ],
   })
   assert.equal(cards.length, 1)
   assert.equal(cards[0]?.summary, 'sort the attachments')
@@ -158,7 +204,19 @@ test('a live snapshot becomes sidebar statuses and cards', () => {
   assert.equal(cards[0]?.events[0]?.text, 'halfway there')
   const board = readLiveBoard({
     ok: true,
-    work: { signals: { 'bot-a': ['ready'] }, cards: { 'bot-a': [{ summary: 'sort the attachments', ticket: { id: 't1', status: 'ready', briefing_revision: 1, active_attempt_id: '' }, attempts: [], events: [] }] } },
+    work: {
+      signals: { 'bot-a': ['ready'] },
+      cards: {
+        'bot-a': [
+          {
+            summary: 'sort the attachments',
+            ticket: { id: 't1', status: 'ready', briefing_revision: 1, active_attempt_id: '' },
+            attempts: [],
+            events: [],
+          },
+        ],
+      },
+    },
   })
   assert.deepEqual(board?.signals['bot-a'], ['ready'])
   assert.equal(board?.cards['bot-a']?.[0]?.summary, 'sort the attachments')

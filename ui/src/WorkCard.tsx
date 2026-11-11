@@ -4,7 +4,12 @@ import { useI18n } from './locale'
 import { MarkdownView } from './MarkdownView'
 import { questionView, ticketFacts, workLabel, type WorkBriefing, type WorkTicket } from './work'
 
-export function WorkCard({ ticket, now, onSupply, onOpen }: {
+export function WorkCard({
+  ticket,
+  now,
+  onSupply,
+  onOpen,
+}: {
   ticket: WorkTicket
   now: number
   onSupply: (ticketId: string, text: string) => Promise<string>
@@ -24,16 +29,16 @@ export function WorkCard({ ticket, now, onSupply, onOpen }: {
           <span className={live ? 'work-status live' : 'work-status'}>{workLabel(ticket.status, t)}</span>
         )}
       </header>
-      {ticketFacts(ticket, now, t).map(line => <p key={line}>{line}</p>)}
+      {ticketFacts(ticket, now, t).map(line => (
+        <p key={line}>{line}</p>
+      ))}
       {ticket.childSessionId ? (
         <button type="button" className="work-open" onClick={() => onOpen(ticket.childSessionId ?? '')}>
           {t('work.openWorker')}
         </button>
       ) : null}
       {question ? (
-        <p className={question.stale ? 'stale' : 'work-question'}>
-          {question.text || t('work.questionEmpty')}
-        </p>
+        <p className={question.stale ? 'stale' : 'work-question'}>{question.text || t('work.questionEmpty')}</p>
       ) : null}
       {question?.stale ? <p className="work-quiet">{t('work.questionStale')}</p> : null}
       {ticket.status === 'needs_user' ? (
@@ -54,22 +59,24 @@ export function WorkCard({ ticket, now, onSupply, onOpen }: {
         >
           <label>
             <span>{t('work.answerLabel')}</span>
-            <textarea
-              value={draft}
-              rows={2}
-              disabled={sending}
-              onChange={event => setDraft(event.target.value)}
-            />
+            <textarea value={draft} rows={2} disabled={sending} onChange={event => setDraft(event.target.value)} />
           </label>
           {error ? <p className="work-error">{error}</p> : null}
-          <button type="submit" disabled={sending || draft.trim() === ''}>{t('work.answerSubmit')}</button>
+          <button type="submit" disabled={sending || draft.trim() === ''}>
+            {t('work.answerSubmit')}
+          </button>
         </form>
       ) : null}
     </article>
   )
 }
 
-export function BriefingCard({ briefing, time, mark, onOpenFile }: {
+export function BriefingCard({
+  briefing,
+  time,
+  mark,
+  onOpenFile,
+}: {
   briefing: WorkBriefing
   time?: string
   mark?: string
@@ -77,7 +84,11 @@ export function BriefingCard({ briefing, time, mark, onOpenFile }: {
 }) {
   const { t } = useI18n()
   const [open, setOpen] = useState(false)
-  const preview = briefing.body.split('\n').map(line => line.trim()).find(Boolean) ?? ''
+  const preview =
+    briefing.body
+      .split('\n')
+      .map(line => line.trim())
+      .find(Boolean) ?? ''
   const facts = [
     briefing.wallMs != null ? t('work.duration', { value: formatBudget(briefing.wallMs, t) }) : '',
     briefing.maxTokens != null ? `token ${briefing.maxTokens.toLocaleString('en-US')}` : '',
@@ -96,7 +107,11 @@ export function BriefingCard({ briefing, time, mark, onOpenFile }: {
           <div className="briefing-body">
             {briefing.body ? <MarkdownView text={briefing.body} onOpenFile={onOpenFile} /> : null}
             {facts.length ? <p className="briefing-facts">{facts.join(' · ')}</p> : null}
-            {briefing.notes.map(note => <p key={note} className="briefing-note">{note}</p>)}
+            {briefing.notes.map(note => (
+              <p key={note} className="briefing-note">
+                {note}
+              </p>
+            ))}
           </div>
         </Collapse>
       </article>
@@ -114,7 +129,14 @@ function formatBudget(ms: number, t: ReturnType<typeof useI18n>['t']): string {
 function Chevron() {
   return (
     <svg className="briefing-chevron" viewBox="0 0 16 16" aria-hidden="true">
-      <path d="M4 6.5L8 10.5L12 6.5" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
+      <path
+        d="M4 6.5L8 10.5L12 6.5"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.4"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
     </svg>
   )
 }

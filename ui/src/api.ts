@@ -1,16 +1,22 @@
 /** Desk calls. Session, task, file, health, and usage routes are served by the plugin. */
 
-export async function api(path: string, options?: RequestInit): Promise<{ status: number, body: Record<string, unknown> }> {
+export async function api(
+  path: string,
+  options?: RequestInit,
+): Promise<{ status: number; body: Record<string, unknown> }> {
   const response = await fetch('/dsh-bot/api' + path, {
     ...options,
     headers: { accept: 'application/json', ...(options?.headers ?? {}) },
   })
   const body = await response.json().catch(() => ({}))
-  return { status: response.status, body: body && typeof body === 'object' ? body as Record<string, unknown> : {} }
+  return { status: response.status, body: body && typeof body === 'object' ? (body as Record<string, unknown>) : {} }
 }
 
 /** Read a JSON body as it arrives. `total` is the content length when the server sent one. */
-export async function readJsonStream(response: Response, onBytes?: (received: number, total: number | null) => void): Promise<unknown> {
+export async function readJsonStream(
+  response: Response,
+  onBytes?: (received: number, total: number | null) => void,
+): Promise<unknown> {
   const header = response.headers.get('content-length')
   const parsedLength = header == null ? null : Number(header)
   const total = parsedLength != null && Number.isFinite(parsedLength) && parsedLength >= 0 ? parsedLength : null

@@ -19,7 +19,10 @@ export function mentionQuery(text: string, cursor: number): MentionQuery | null 
 
 /** Keep the token in the form the system prompt tells the model to read. */
 export function mentionLabel(label: string): string {
-  const cleaned = label.replace(/[@()\r\n]/g, ' ').replace(/\s+/g, ' ').trim()
+  const cleaned = label
+    .replace(/[@()\r\n]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
   return cleaned || 'Untitled'
 }
 
@@ -27,7 +30,13 @@ export function mentionToken(label: string, sessionId: string): string {
   return `@${mentionLabel(label)} (${sessionId})`
 }
 
-export function insertMention(text: string, cursor: number, start: number, label: string, sessionId: string): { text: string, cursor: number } {
+export function insertMention(
+  text: string,
+  cursor: number,
+  start: number,
+  label: string,
+  sessionId: string,
+): { text: string; cursor: number } {
   const safe = Math.max(0, Math.min(cursor, text.length))
   const token = `${mentionToken(label, sessionId)} `
   return {
@@ -38,8 +47,10 @@ export function insertMention(text: string, cursor: number, start: number, label
 
 export function filterMentions(targets: readonly MentionTarget[], query: string): MentionTarget[] {
   const needle = query.trim().toLowerCase()
-  return targets.filter(item => {
-    if (needle === '') return true
-    return item.label.toLowerCase().includes(needle) || item.sessionId.toLowerCase().includes(needle)
-  }).slice(0, 8)
+  return targets
+    .filter(item => {
+      if (needle === '') return true
+      return item.label.toLowerCase().includes(needle) || item.sessionId.toLowerCase().includes(needle)
+    })
+    .slice(0, 8)
 }

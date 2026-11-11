@@ -3,6 +3,23 @@ import { join } from 'node:path'
 import { DatabaseSync, backup } from 'node:sqlite'
 import { ensureDir, sha256, writeAtomic } from './fs-safe.ts'
 
+/**
+ * Rows coming back from SQL strings. The statements are written as text, so the
+ * column types live in the SQL, not in a generated row type.
+ */
+export interface SqlStatement {
+  all(...params: any[]): any[]
+  get(...params: any[]): any
+  run(...params: any[]): { changes: number | bigint; lastInsertRowid: number | bigint }
+  columns(): Array<{ name: string }>
+}
+
+export interface SqlDatabase {
+  exec(sql: string): void
+  prepare(sql: string): SqlStatement
+  close(): void
+}
+
 export const SCHEMA_VERSION = 4
 
 const MIGRATION = `
@@ -349,12 +366,21 @@ CREATE TABLE IF NOT EXISTS user_deliveries (
 /**
  * @param {string} dataDir
  */
-export function openStore(dataDir) {
+export function openStore(dataDir: string) {
   const root = ensureDir(dataDir)
-  for (const dir of ['blobs/persona', 'blobs/skills', 'src/soul', 'src/skills/public', 'src/skills/private', 'export', 'backups', 'secrets/webhooks']) {
+  for (const dir of [
+    'blobs/persona',
+    'blobs/skills',
+    'src/soul',
+    'src/skills/public',
+    'src/skills/private',
+    'export',
+    'backups',
+    'secrets/webhooks',
+  ]) {
     mkdirSync(join(root, dir), { recursive: true, mode: 0o700 })
   }
-  const db = new DatabaseSync(join(root, 'persona.sqlite'))
+  const db = new DatabaseSync(join(root, 'persona.sqlite')) as unknown as SqlDatabase
   db.exec('PRAGMA foreign_keys = ON')
   db.exec('PRAGMA journal_mode = WAL')
   db.exec('PRAGMA busy_timeout = 5000')
@@ -365,13 +391,15 @@ export function openStore(dataDir) {
 /**
  * @param {DatabaseSync} db
  */
-function migrate(db) {
+function migrate(db: SqlDatabase) {
   db.exec(MIGRATION)
   db.exec(MIGRATION_V2)
   db.exec(MIGRATION_V4)
   const columns = db.prepare('PRAGMA table_info(session_bindings)').all()
   if (!columns.some(column => column.name === 'kind')) {
-    db.exec(`ALTER TABLE session_bindings ADD COLUMN kind TEXT NOT NULL DEFAULT 'session' CHECK (kind IN ('session','bot'))`)
+    db.exec(
+      `ALTER TABLE session_bindings ADD COLUMN kind TEXT NOT NULL DEFAULT 'session' CHECK (kind IN ('session','bot'))`,
+    )
   }
   for (const version of [1, 2, 3, SCHEMA_VERSION]) {
     const row = db.prepare('SELECT version FROM schema_migrations WHERE version = ?').get(version)
@@ -384,7 +412,7 @@ function now() {
 }
 
 class KeyedLock {
-  tails: any
+  tails: Map<string, Promise<void>>
 
   constructor() {
     /** @type {Map<string, Promise<void>>} */
@@ -396,15 +424,19 @@ class KeyedLock {
    * @param {() => unknown} fn
    * @param {number} timeoutMs
    */
-  async run(key, fn, timeoutMs) {
+  async run(key: string, fn: () => unknown, timeoutMs: number) {
     const prev = this.tails.get(key) ?? Promise.resolve()
     let release = () => {}
-    const current = new Promise<void>(resolve => { release = () => resolve() })
+    const current = new Promise<void>(resolve => {
+      release = () => resolve()
+    })
     this.tails.set(key, current)
     let timer
     const acquired = await Promise.race([
       prev.then(() => 'ok'),
-      new Promise(resolve => { timer = setTimeout(() => resolve('busy'), timeoutMs) }),
+      new Promise(resolve => {
+        timer = setTimeout(() => resolve('busy'), timeoutMs)
+      }),
     ])
     clearTimeout(timer)
     if (acquired !== 'ok') {
@@ -422,16 +454,16 @@ class KeyedLock {
 }
 
 export class Store {
-  db: any
-  root: any
+  db: SqlDatabase
+  root: string
   lock: any
   busyTimeoutMs: any
 
   /**
-   * @param {DatabaseSync} db
+   * @param {SqlDatabase} db
    * @param {string} root
    */
-  constructor(db, root) {
+  constructor(db: SqlDatabase, root: string) {
     this.db = db
     this.root = root
     this.lock = new KeyedLock()
@@ -446,24 +478,32 @@ export class Store {
    * @param {string} scope
    * @param {() => unknown} fn
    */
-  async write(scope, fn) {
-    return this.lock.run(scope, () => {
-      this.db.exec('BEGIN IMMEDIATE')
-      try {
-        const value = fn()
-        this.db.exec('COMMIT')
-        return value
-      } catch (error) {
-        try { this.db.exec('ROLLBACK') } catch { /* already closed */ }
-        throw error
-      }
-    }, this.busyTimeoutMs)
+  async write(scope: string, fn: () => unknown) {
+    return this.lock.run(
+      scope,
+      () => {
+        this.db.exec('BEGIN IMMEDIATE')
+        try {
+          const value = fn()
+          this.db.exec('COMMIT')
+          return value
+        } catch (error) {
+          try {
+            this.db.exec('ROLLBACK')
+          } catch {
+            /* already closed */
+          }
+          throw error
+        }
+      },
+      this.busyTimeoutMs,
+    )
   }
 
   /**
    * @param {() => unknown} fn
    */
-  read(fn) {
+  read(fn: () => unknown) {
     this.db.exec('BEGIN')
     try {
       return fn()
@@ -477,7 +517,7 @@ export class Store {
    * @param {string} hash
    * @param {Buffer | string} bytes
    */
-  writeBlob(kind, hash, bytes) {
+  writeBlob(kind: string, hash: string, bytes: Buffer | string) {
     const dir = join(this.root, 'blobs', kind === 'persona' ? 'persona' : join('skills', hash))
     if (kind === 'persona') {
       const file = join(this.root, 'blobs', 'persona', `${hash}.md`)
@@ -494,10 +534,11 @@ export class Store {
    * @param {'persona' | 'skill'} kind
    * @param {string} hash
    */
-  readBlob(kind, hash) {
-    const file = kind === 'persona'
-      ? join(this.root, 'blobs', 'persona', `${hash}.md`)
-      : join(this.root, 'blobs', 'skills', hash, 'SKILL.md')
+  readBlob(kind: 'persona' | 'skill', hash: string) {
+    const file =
+      kind === 'persona'
+        ? join(this.root, 'blobs', 'persona', `${hash}.md`)
+        : join(this.root, 'blobs', 'skills', hash, 'SKILL.md')
     if (!existsSync(file)) return null
     return readFileSync(file)
   }
@@ -507,10 +548,10 @@ export class Store {
    * connection is open and pretend that copy is consistent.
    * @param {string} destDir
    */
-  async backupTo(destDir) {
+  async backupTo(destDir: string) {
     mkdirSync(destDir, { recursive: true, mode: 0o700 })
     const dbFile = join(destDir, 'persona.sqlite')
-    await backup(this.db, dbFile, { rate: 1 })
+    await backup(this.db as unknown as DatabaseSync, dbFile, { rate: 1 })
     const copied = []
     const personas = this.db.prepare('SELECT content_hash FROM persona_versions').all()
     for (const row of personas) {
@@ -550,7 +591,7 @@ export { now }
  * @param {string} backupDir
  * @param {number | null} ownerPid
  */
-export async function restoreBackup(dataDir, backupDir, ownerPid) {
+export async function restoreBackup(dataDir: string, backupDir: string, ownerPid: number | null) {
   if (ownerPid != null && pidAlive(ownerPid)) {
     throw Object.assign(new Error('profile store is open; stop dsh before restore'), { code: 'BUSY' })
   }
@@ -576,7 +617,7 @@ export async function restoreBackup(dataDir, backupDir, ownerPid) {
 /**
  * @param {number} pid
  */
-export function pidAlive(pid) {
+export function pidAlive(pid: number) {
   try {
     process.kill(pid, 0)
     return true
@@ -589,7 +630,7 @@ export function pidAlive(pid) {
  * @param {string} from
  * @param {string} to
  */
-function copyTree(from, to) {
+function copyTree(from: string, to: string) {
   mkdirSync(to, { recursive: true, mode: 0o700 })
   for (const name of readdirSync(from, { withFileTypes: true })) {
     const src = join(from, name.name)

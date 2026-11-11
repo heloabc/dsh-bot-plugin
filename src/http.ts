@@ -1,7 +1,8 @@
 import { createReadStream, statSync } from 'node:fs'
 import { dirname, extname, join, resolve, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { createDesk } from './desk.ts'
+import { createDesk, type DeskRequest } from './desk.ts'
+import type { HostContext } from './host.ts'
 import { toolError } from './errors.ts'
 import { sessionEvents } from './inbox.ts'
 import { createSessionSnapshots, eventsBefore, eventsWindow, followTailStart } from './live-snapshot.ts'
@@ -12,29 +13,42 @@ import { handleWorkApi, openPageLive, openWorkLive } from './work-http.ts'
  * Local management routes. Model tools cannot confirm a persona or change revocation.
  * @param {import('@deepseek-ai/cordis').Context} ctx
  * @param {import('./engine.js').Engine} engine
- * @param {() => import('./triggers.js').ReturnType<import('./triggers.js').createTriggers> | null} [getRuntime]
- * @param {() => import('./work-worker.js').ReturnType<import('./work-worker.js').createWorkRuntime> | null} [getWork]
+ * @param {() => import('./triggers.js').ReturnType<typeof import('./triggers.js').createTriggers> | null} [getRuntime]
+ * @param {() => import('./work-worker.js').ReturnType<typeof import('./work-worker.js').createWorkRuntime> | null} [getWork]
  */
-export function registerHttp(ctx, engine, getRuntime = () => null, getWork = () => null, dataDir = '') {
+export function registerHttp(
+  ctx: HostContext & { effect(execute: () => void | (() => void)): void },
+  engine: import('./engine.ts').Engine,
+  getRuntime: () => ReturnType<typeof import('./triggers.ts').createTriggers> | null = () => null,
+  getWork: () => ReturnType<typeof import('./work-worker.ts').createWorkRuntime> | null = () => null,
+  dataDir = '',
+) {
   const webServer = ctx.webServer
   const storeDir = dataDir || (ctx.profileContext?.dir ? join(ctx.profileContext.dir, 'session-foundations') : '')
   const profileDir = ctx.profileContext?.dir || (storeDir !== '' ? dirname(storeDir) : '')
   const sessionSnapshots = createSessionSnapshots()
-  const desk = profileDir === '' ? null : createDesk({
-    ledgerFile: join(storeDir, 'desk-ledger.json'),
-    profileDir,
-    sessionCwd: (process.env.THREADY_SESSION_CWD ?? '').trim(),
-    isBot: (sessionId) => engine.isBot(sessionId),
-    mark: (sessionId) => engine.markBot(sessionId),
-    hold: (sessionId) => { getWork()?.holdNotices(sessionId) },
-    release: (sessionId) => { getWork()?.releaseHold(sessionId) },
-    rpc: (endpoint, args, req) => hostRpc(req, endpoint, args),
-    usage: (req) => hostUsage(req),
-  })
+  const desk =
+    profileDir === ''
+      ? null
+      : createDesk({
+          ledgerFile: join(storeDir, 'desk-ledger.json'),
+          profileDir,
+          sessionCwd: (process.env.THREADY_SESSION_CWD ?? '').trim(),
+          isBot: sessionId => engine.isBot(sessionId),
+          mark: sessionId => engine.markBot(sessionId),
+          hold: sessionId => {
+            getWork()?.holdNotices(sessionId)
+          },
+          release: sessionId => {
+            getWork()?.releaseHold(sessionId)
+          },
+          rpc: (endpoint, args, req) => hostRpc(req, endpoint, args),
+          usage: req => hostUsage(req),
+        })
   /**
    * @param {import('node:http').IncomingMessage} req
    */
-  async function loadPageDesk(req) {
+  async function loadPageDesk(req: import('node:http').IncomingMessage) {
     if (!desk) return null
     const base = 'http://127.0.0.1'
     const [sessions, health, usage] = await Promise.all([
@@ -50,7 +64,7 @@ export function registerHttp(ctx, engine, getRuntime = () => null, getWork = () 
       bots: { ok: true, sessionIds: bots.map(bot => bot.sessionId), bots },
     }
   }
-  const handler = async (req, res) => {
+  const handler = async (req: import('node:http').IncomingMessage, res: import('node:http').ServerResponse) => {
     const rejection = reject(ctx, req)
     if (rejection) return send(res, rejection, { ok: false, code: 'FORBIDDEN' })
     const url = new URL(req.url ?? '/', 'http://127.0.0.1')
@@ -73,7 +87,8 @@ export function registerHttp(ctx, engine, getRuntime = () => null, getWork = () 
       }
       if (req.method === 'POST' && path === '/session-foundations/api/sessions/mark') {
         const body = await readJson(req)
-        if (typeof body.sessionId !== 'string' || body.sessionId.trim() === '') return send(res, 400, toolError('VALIDATION', 'sessionId is required.'))
+        if (typeof body.sessionId !== 'string' || body.sessionId.trim() === '')
+          return send(res, 400, toolError('VALIDATION', 'sessionId is required.'))
         const binding = engine.markBot(body.sessionId.trim())
         return send(res, 200, { ok: true, kind: 'bot', sessionId: binding.session_id })
       }
@@ -92,10 +107,12 @@ export function registerHttp(ctx, engine, getRuntime = () => null, getWork = () 
       }
       if (req.method === 'POST' && path === '/session-foundations/api/persona/confirm') {
         const body = await readJson(req)
-        if (typeof body.text !== 'string' || body.text.trim() === '') return send(res, 400, toolError('VALIDATION', 'text is required.'))
+        if (typeof body.text !== 'string' || body.text.trim() === '')
+          return send(res, 400, toolError('VALIDATION', 'text is required.'))
         const persona = engine.confirmPersona(body.text, typeof body.note === 'string' ? body.note : undefined)
         if (typeof body.sessionId === 'string' && body.sessionId !== '') {
-          if (!engine.isBot(body.sessionId)) return send(res, 400, toolError('FORBIDDEN', 'Only a bot session can bind a persona.'))
+          if (!engine.isBot(body.sessionId))
+            return send(res, 400, toolError('FORBIDDEN', 'Only a bot session can bind a persona.'))
           engine.bindPersona(body.sessionId, persona.id)
         }
         return send(res, 200, { ok: true, persona })
@@ -107,8 +124,13 @@ export function registerHttp(ctx, engine, getRuntime = () => null, getWork = () 
       }
       if (req.method === 'POST' && path === '/session-foundations/api/skills/register') {
         const body = await readJson(req)
-        if (!engine.isBot(body.sessionId)) return send(res, 400, toolError('FORBIDDEN', 'Only a bot session can register a skill.'))
-        const row = engine.registerSkillFromDisk(body.sessionId, body.scope === 'private' ? 'private' : 'public', body.skillId)
+        if (!engine.isBot(body.sessionId))
+          return send(res, 400, toolError('FORBIDDEN', 'Only a bot session can register a skill.'))
+        const row = engine.registerSkillFromDisk(
+          body.sessionId,
+          body.scope === 'private' ? 'private' : 'public',
+          body.skillId,
+        )
         return send(res, 200, { ok: true, skill: row })
       }
       const hookMatch = /^\/session-foundations\/hooks\/([^/]+)$/.exec(path)
@@ -139,7 +161,8 @@ export function registerHttp(ctx, engine, getRuntime = () => null, getWork = () 
         const runtime = getRuntime()
         if (!runtime) return send(res, 503, toolError('UNAVAILABLE', 'Triggers are not attached to this host yet.'))
         const body = await readJson(req)
-        if (typeof body.senderSessionId !== 'string') return send(res, 400, toolError('VALIDATION', 'senderSessionId is required.'))
+        if (typeof body.senderSessionId !== 'string')
+          return send(res, 400, toolError('VALIDATION', 'senderSessionId is required.'))
         const result = await runtime.send(body.senderSessionId, body)
         return send(res, result.ok ? 202 : 400, result)
       }
@@ -148,21 +171,28 @@ export function registerHttp(ctx, engine, getRuntime = () => null, getWork = () 
         if (!runtime) return send(res, 503, toolError('UNAVAILABLE', 'Triggers are not attached to this host yet.'))
         return send(res, 200, {
           ok: true,
-          deliveries: runtime.listDeliveries(url.searchParams.get('sessionId') ?? '', url.searchParams.get('correlationId') ?? ''),
+          deliveries: runtime.listDeliveries(
+            url.searchParams.get('sessionId') ?? '',
+            url.searchParams.get('correlationId') ?? '',
+          ),
         })
       }
       if (req.method === 'POST' && path === '/session-foundations/api/timers') {
         const runtime = getRuntime()
         if (!runtime) return send(res, 503, toolError('UNAVAILABLE', 'Triggers are not attached to this host yet.'))
         const body = await readJson(req)
-        return send(res, 200, runtime.addSchedule({
-          sessionId: body.sessionId,
-          kind: body.kind,
-          cron: body.cron,
-          runAt: body.runAt,
-          timezone: body.timezone,
-          note: body.note,
-        }))
+        return send(
+          res,
+          200,
+          runtime.addSchedule({
+            sessionId: body.sessionId,
+            kind: body.kind,
+            cron: body.cron,
+            runAt: body.runAt,
+            timezone: body.timezone,
+            note: body.note,
+          }),
+        )
       }
       if (req.method === 'GET' && path === '/session-foundations/api/timers') {
         const runtime = getRuntime()
@@ -195,7 +225,12 @@ export function registerHttp(ctx, engine, getRuntime = () => null, getWork = () 
         const body = await readJson(req)
         return send(res, 200, runtime.revokeWebhook(body.id))
       }
-      if (req.method === 'GET' && (path === '/session-foundations/api/snapshot' || path === '/session-foundations/api/snapshot/chunks' || path === '/session-foundations/api/snapshot/range')) {
+      if (
+        req.method === 'GET' &&
+        (path === '/session-foundations/api/snapshot' ||
+          path === '/session-foundations/api/snapshot/chunks' ||
+          path === '/session-foundations/api/snapshot/range')
+      ) {
         const sessionId = url.searchParams.get('sessionId') ?? ''
         if (sessionId === '') return send(res, 400, toolError('VALIDATION', 'sessionId is required.'))
         if (path === '/session-foundations/api/snapshot/chunks') {
@@ -207,13 +242,18 @@ export function registerHttp(ctx, engine, getRuntime = () => null, getWork = () 
         const beforeSeq = readCount(url, 'beforeSeq')
         const fromSeq = readCount(url, 'fromSeq')
         const tailMessages = readCount(url, 'tailMessages')
-        if (beforeSeq === false || fromSeq === false || tailMessages === false) return send(res, 400, toolError('VALIDATION', 'Sequence bounds must be non-negative integers.'))
+        if (beforeSeq === false || fromSeq === false || tailMessages === false)
+          return send(res, 400, toolError('VALIDATION', 'Sequence bounds must be non-negative integers.'))
         /** @type {unknown[]} */
-        let events = []
+        let events: unknown[] = []
         try {
           events = await sessionEvents(ctx, sessionId)
         } catch (error) {
-          return send(res, 503, toolError('UNAVAILABLE', error instanceof Error ? error.message : 'The session log is not readable.'))
+          return send(
+            res,
+            503,
+            toolError('UNAVAILABLE', error instanceof Error ? error.message : 'The session log is not readable.'),
+          )
         }
         if (path === '/session-foundations/api/snapshot/range') {
           if (typeof fromSeq !== 'number') return send(res, 400, toolError('VALIDATION', 'fromSeq is required.'))
@@ -223,7 +263,15 @@ export function registerHttp(ctx, engine, getRuntime = () => null, getWork = () 
         const cut = typeof beforeSeq === 'number' ? beforeSeq : tail == null ? null : followTailStart(events, tail)
         const source = cut == null ? events : eventsBefore(events, cut)
         if (source.length === 0) {
-          return send(res, 200, { ok: true, sessionId, epoch: '', totalSize: 0, hashes: [], count: 0, ...(cut == null ? {} : { beforeSeq: cut }) })
+          return send(res, 200, {
+            ok: true,
+            sessionId,
+            epoch: '',
+            totalSize: 0,
+            hashes: [],
+            count: 0,
+            ...(cut == null ? {} : { beforeSeq: cut }),
+          })
         }
         sessionSnapshots.publish(sessionId, source)
         const listed = sessionSnapshots.manifest(sessionId)
@@ -251,7 +299,8 @@ export function registerHttp(ctx, engine, getRuntime = () => null, getWork = () 
       }
       if (req.method === 'POST' && path === '/session-foundations/api/skills/flags') {
         const body = await readJson(req)
-        if (!engine.isBot(body.sessionId)) return send(res, 400, toolError('FORBIDDEN', 'Only a bot session can change a skill.'))
+        if (!engine.isBot(body.sessionId))
+          return send(res, 400, toolError('FORBIDDEN', 'Only a bot session can change a skill.'))
         const row = engine.setSkillFlags(body.sessionId, body.skillId, {
           enabled: body.enabled,
           revoked: body.revoked,
@@ -290,7 +339,7 @@ export function registerHttp(ctx, engine, getRuntime = () => null, getWork = () 
  * @param {import('./engine.js').Engine} engine
  * @param {string} sessionId
  */
-export function status(engine, sessionId) {
+export function status(engine: import('./engine.ts').Engine, sessionId: string) {
   if (sessionId === '') {
     const persona = engine.latestPersona()
     return { ok: true, persona, personaText: personaText(engine, persona) }
@@ -305,7 +354,13 @@ export function status(engine, sessionId) {
     view,
     persona,
     personaText: personaText(engine, persona),
-    skills: binding ? engine.store.db.prepare('SELECT skill_id, scope, version, enabled, revoked, content_hash FROM skill_bindings WHERE session_id = ?').all(sessionId) : [],
+    skills: binding
+      ? engine.store.db
+          .prepare(
+            'SELECT skill_id, scope, version, enabled, revoked, content_hash FROM skill_bindings WHERE session_id = ?',
+          )
+          .all(sessionId)
+      : [],
     isolation: 'host-session-id',
     sandbox: false,
   }
@@ -315,7 +370,7 @@ export function status(engine, sessionId) {
  * @param {import('./engine.js').Engine} engine
  * @param {{ content_hash: string } | null} persona
  */
-function personaText(engine, persona) {
+function personaText(engine: import('./engine.ts').Engine, persona: { content_hash: string } | null) {
   if (!persona) return ''
   const bytes = engine.store.readBlob('persona', persona.content_hash)
   return bytes ? bytes.toString('utf8') : ''
@@ -325,10 +380,14 @@ function personaText(engine, persona) {
  * @param {import('./engine.js').Engine} engine
  * @param {string} sessionId
  */
-export function memoryView(engine, sessionId) {
+export function memoryView(engine: import('./engine.ts').Engine, sessionId: string) {
   return {
-    facts: engine.store.db.prepare('SELECT id, content, status, revision, priority FROM facts WHERE session_id = ? ORDER BY id').all(sessionId),
-    memories: engine.store.db.prepare('SELECT id, title, content, status, revision FROM memories WHERE session_id = ? ORDER BY id').all(sessionId),
+    facts: engine.store.db
+      .prepare('SELECT id, content, status, revision, priority FROM facts WHERE session_id = ? ORDER BY id')
+      .all(sessionId),
+    memories: engine.store.db
+      .prepare('SELECT id, title, content, status, revision FROM memories WHERE session_id = ? ORDER BY id')
+      .all(sessionId),
     state: engine.statePayload(sessionId),
   }
 }
@@ -339,7 +398,7 @@ export function memoryView(engine, sessionId) {
  * @param {string} name
  * @returns {number | null | false}
  */
-function readCount(url, name) {
+function readCount(url: URL, name: string): number | null | false {
   const raw = url.searchParams.get(name)
   if (raw == null || raw === '') return null
   if (!/^\d+$/.test(raw)) return false
@@ -352,7 +411,7 @@ function readCount(url, name) {
  * @param {import('@deepseek-ai/cordis').Context} ctx
  * @param {import('node:http').IncomingMessage} req
  */
-function reject(ctx, req) {
+function reject(ctx: HostContext, req: import('node:http').IncomingMessage) {
   const connection = ctx.get?.('connection') ?? ctx.connection
   const rejection = connection?.requestRejection?.(req)
   if (rejection !== undefined) return rejection
@@ -366,7 +425,7 @@ function reject(ctx, req) {
  * @param {number} status
  * @param {unknown} body
  */
-function send(res, status, body) {
+function send(res: import('node:http').ServerResponse, status: number, body: unknown) {
   if (status === 0) return
   const text = JSON.stringify(body)
   res.writeHead(status, {
@@ -384,7 +443,7 @@ function send(res, status, body) {
  * @param {import('node:http').IncomingMessage} req
  * @param {string} name
  */
-function header(req, name) {
+function header(req: DeskRequest | import('node:http').IncomingMessage, name: string) {
   const value = req.headers[name]
   return Array.isArray(value) ? value[0] : value
 }
@@ -393,11 +452,11 @@ function header(req, name) {
  * @param {import('node:http').IncomingMessage} req
  * @param {number} max
  */
-function readRaw(req, max) {
+function readRaw(req: import('node:http').IncomingMessage, max: number): Promise<Buffer> {
   return new Promise((resolve, rejectPromise) => {
-    const chunks = []
+    const chunks: any[] = []
     let size = 0
-    req.on('data', chunk => {
+    req.on('data', (chunk: any) => {
       size += chunk.length
       if (size > max) {
         rejectPromise(Object.assign(new Error('The body is too long.'), { code: 'VALIDATION' }))
@@ -411,10 +470,10 @@ function readRaw(req, max) {
   })
 }
 
-function readJson(req): Promise<any> {
+function readJson(req: import('node:http').IncomingMessage): Promise<any> {
   return new Promise((resolve, rejectPromise) => {
-    const chunks = []
-    req.on('data', chunk => chunks.push(chunk))
+    const chunks: any[] = []
+    req.on('data', (chunk: any) => chunks.push(chunk))
     req.on('end', () => {
       try {
         resolve(JSON.parse(Buffer.concat(chunks).toString('utf8') || '{}'))
@@ -433,11 +492,19 @@ function readJson(req): Promise<any> {
  * @param {string} endpoint
  * @param {Record<string, unknown>} args
  */
-async function hostRpc(req, endpoint, args) {
+async function hostRpc(req: DeskRequest, endpoint: string, args: Record<string, unknown>) {
   const origin = localOrigin(req)
   const cookie = header(req, 'cookie') ?? ''
   if (origin === '' || cookie === '') {
-    return { status: 503, body: { result: { ok: false, error: { code: 'primary_unready', message: 'This process has not issued a session cookie yet.' } } } }
+    return {
+      status: 503,
+      body: {
+        result: {
+          ok: false,
+          error: { code: 'primary_unready', message: 'This process has not issued a session cookie yet.' },
+        },
+      },
+    }
   }
   const response = await fetch(`${origin}/api/${endpoint}`, {
     method: 'POST',
@@ -456,7 +523,11 @@ async function hostRpc(req, endpoint, args) {
   })
   const text = await response.text()
   let parsed = null
-  try { parsed = JSON.parse(text) } catch { parsed = null }
+  try {
+    parsed = JSON.parse(text)
+  } catch {
+    parsed = null
+  }
   const result = parsed?.result ?? { ok: false, error: { code: 'bad-response', message: `HTTP ${response.status}` } }
   return { status: response.status, body: { result } }
 }
@@ -464,10 +535,11 @@ async function hostRpc(req, endpoint, args) {
 /**
  * @param {import('node:http').IncomingMessage} req
  */
-async function hostUsage(req) {
+async function hostUsage(req: DeskRequest) {
   const origin = localOrigin(req)
   const cookie = header(req, 'cookie') ?? ''
-  if (origin === '' || cookie === '') return { connected: false, code: 'primary_unready', error: 'This process has not issued a session cookie yet.' }
+  if (origin === '' || cookie === '')
+    return { connected: false, code: 'primary_unready', error: 'This process has not issued a session cookie yet.' }
   let response
   try {
     response = await fetch(`${origin}/ollama-usage/api/summary`, {
@@ -478,10 +550,20 @@ async function hostUsage(req) {
   }
   const text = await response.text()
   let body = null
-  try { body = JSON.parse(text) } catch { body = null }
-  if (response.status === 404) return { connected: false, code: 'usage_not_installed', error: 'The usage plugin is not installed.' }
+  try {
+    body = JSON.parse(text)
+  } catch {
+    body = null
+  }
+  if (response.status === 404)
+    return { connected: false, code: 'usage_not_installed', error: 'The usage plugin is not installed.' }
   if (!body || body.ok !== true) {
-    return { connected: false, code: 'usage_unconfigured', status: response.status, error: typeof body?.error === 'string' ? body.error : 'The usage upstream is unavailable.' }
+    return {
+      connected: false,
+      code: 'usage_unconfigured',
+      status: response.status,
+      error: typeof body?.error === 'string' ? body.error : 'The usage upstream is unavailable.',
+    }
   }
   return { connected: true, summary: body }
 }
@@ -489,7 +571,7 @@ async function hostUsage(req) {
 /**
  * @param {import('node:http').IncomingMessage} req
  */
-function localOrigin(req) {
+function localOrigin(req: DeskRequest) {
   const port = req.socket?.localPort
   if (!port) return ''
   const address = req.socket?.localAddress ?? ''
@@ -511,17 +593,29 @@ const DESK_TYPES = new Map([
 ])
 
 /** Workbench files built into public/. API routes are handled before this. */
-function serveDesk(req, res, pathname) {
+function serveDesk(
+  req: import('node:http').IncomingMessage,
+  res: import('node:http').ServerResponse,
+  pathname: string,
+) {
   if (req.method !== 'GET' && req.method !== 'HEAD') return false
   const rel = pathname === '/dsh-bot' ? 'index.html' : pathname.slice('/dsh-bot/'.length)
   let decoded = rel
-  try { decoded = decodeURIComponent(rel) } catch { return false }
+  try {
+    decoded = decodeURIComponent(rel)
+  } catch {
+    return false
+  }
   if (decoded === '' || decoded.includes('\0') || decoded.includes('..')) return false
   const root = resolve(DESK_DIR)
   const file = resolve(root, decoded)
   if (file !== root && !file.startsWith(root + sep)) return false
   let stat
-  try { stat = statSync(file) } catch { return false }
+  try {
+    stat = statSync(file)
+  } catch {
+    return false
+  }
   if (!stat.isFile()) return false
   res.writeHead(200, {
     'content-type': DESK_TYPES.get(extname(file)) ?? 'application/octet-stream',

@@ -37,7 +37,7 @@ export const DEFAULT_WORK_BUDGET: WorkBudget = Object.freeze({
  * @param {string[]} pendingIds
  * @param {Iterable<string>} backgroundIds
  */
-export function userPending(pendingIds, backgroundIds) {
+export function userPending(pendingIds: string[], backgroundIds: Iterable<string>) {
   const background = backgroundIds instanceof Set ? backgroundIds : new Set(backgroundIds)
   return pendingIds.filter(id => typeof id === 'string' && id !== '' && !background.has(id))
 }
@@ -55,7 +55,17 @@ export function userPending(pendingIds, backgroundIds) {
  *   starveMs: number,
  * }} input
  */
-export function decideAdmission(input) {
+export function decideAdmission(input: {
+  pendingIds: string[] | null
+  backgroundIds?: Iterable<string>
+  noticeOpen: boolean
+  deliveryOpen: boolean
+  lastNoticeAt?: number | null
+  nowMs: number
+  mergeWindowMs: number
+  terminalSince?: number | null
+  starveMs: number
+}) {
   if (input.pendingIds == null) return { admit: false, reason: 'inbox-unreadable', starve: false, userAhead: 0 }
   const users = userPending(input.pendingIds, input.backgroundIds ?? [])
   const terminalSince = input.terminalSince ?? null
@@ -76,9 +86,18 @@ export function decideAdmission(input) {
  * @param {{ steps?: number, elapsedMs: number, maxSteps?: number, wallMs: number, tokens?: number, maxTokens?: number }} input
  * @returns {'steps' | 'wall' | 'tokens' | null}
  */
-export function budgetTrip(input) {
-  if (Number.isFinite(input.maxSteps) && Number(input.steps) >= input.maxSteps) return 'steps'
-  if (Number.isFinite(input.maxTokens) && Number(input.tokens) >= input.maxTokens) return 'tokens'
+export function budgetTrip(input: {
+  steps?: number
+  elapsedMs: number
+  maxSteps?: number
+  wallMs: number
+  tokens?: number
+  maxTokens?: number
+}): 'steps' | 'wall' | 'tokens' | null {
+  const maxSteps = input.maxSteps
+  const maxTokens = input.maxTokens
+  if (maxSteps != null && Number.isFinite(maxSteps) && Number(input.steps) >= maxSteps) return 'steps'
+  if (maxTokens != null && Number.isFinite(maxTokens) && Number(input.tokens) >= maxTokens) return 'tokens'
   if (input.elapsedMs >= input.wallMs) return 'wall'
   return null
 }
@@ -89,7 +108,7 @@ export function budgetTrip(input) {
  * @param {number} min
  * @param {number} max
  */
-function clampInt(value, min, max) {
+function clampInt(value: unknown, min: number, max: number) {
   const number = Number(value)
   if (!Number.isFinite(number)) return null
   return Math.max(min, Math.min(max, Math.floor(number)))
@@ -103,7 +122,11 @@ function clampInt(value, min, max) {
  * @param {{ wallMs?: number, maxTokens?: number } | null | undefined} suggestion
  * @param {typeof DEFAULT_WORK_BUDGET} defaults
  */
-export function estimateWorkerBudget(briefing, suggestion, defaults = DEFAULT_WORK_BUDGET) {
+export function estimateWorkerBudget(
+  briefing: string,
+  suggestion: { wallMs?: number; maxTokens?: number } | null | undefined,
+  defaults: typeof DEFAULT_WORK_BUDGET = DEFAULT_WORK_BUDGET,
+) {
   const chars = typeof briefing === 'string' ? briefing.length : 0
   const guessedWall = Math.min(defaults.workerWallMs, 180_000 + chars * 100)
   const guessedTokens = Math.min(defaults.workerMaxTokens, 24_000 + chars * 8)
@@ -126,20 +149,32 @@ export function estimateWorkerBudget(briefing, suggestion, defaults = DEFAULT_WO
  * @param {{ provider?: string, model?: string, reasoningEffort?: string } | null} [model]
  * @param {number} [maxTokens] Test-only output cap. Omit it and the host default stays.
  */
-export function childCreateOptions(sessionId, cwd?: string, model?: { provider?: string, model?: string, reasoningEffort?: string } | null, maxTokens?: number) {
+export function childCreateOptions(
+  sessionId: string,
+  cwd?: string,
+  model?: { provider?: string; model?: string; reasoningEffort?: string } | null,
+  maxTokens?: number,
+) {
   const options: {
     sessionId: string
-    meta?: { cwd?: string, agentPreset?: string }
-    agentOptions?: { provider: string, model: string, reasoningEffort?: string, maxTokens?: number }
+    meta?: { cwd?: string; agentPreset?: string }
+    agentOptions?: { provider: string; model: string; reasoningEffort?: string; maxTokens?: number }
     setup?: Function
   } = { sessionId }
   if (typeof cwd === 'string' && cwd !== '') options.meta = { cwd }
-  if (model && typeof model.provider === 'string' && model.provider !== '' && typeof model.model === 'string' && model.model !== '') {
+  if (
+    model &&
+    typeof model.provider === 'string' &&
+    model.provider !== '' &&
+    typeof model.model === 'string' &&
+    model.model !== ''
+  ) {
     options.agentOptions = { provider: model.provider, model: model.model }
     if (typeof model.reasoningEffort === 'string' && model.reasoningEffort !== '') {
       options.agentOptions.reasoningEffort = model.reasoningEffort
     }
-    if (Number.isSafeInteger(maxTokens) && maxTokens > 0) options.agentOptions.maxTokens = maxTokens
+    if (typeof maxTokens === 'number' && Number.isSafeInteger(maxTokens) && maxTokens > 0)
+      options.agentOptions.maxTokens = maxTokens
   }
   return options
 }

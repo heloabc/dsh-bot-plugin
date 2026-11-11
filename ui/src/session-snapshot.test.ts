@@ -52,7 +52,7 @@ test('session open fetches only the chunk hashes missing from the cache', async 
     }
     return { status: 200, body: { ok: true, chunks } }
   }
-  const progress: Array<{ loaded: number, total: number }> = []
+  const progress: Array<{ loaded: number; total: number }> = []
   const loaded = await loadSessionSnapshot('sess', cache, get, step => progress.push({ ...step }))
   assert.ok(Array.isArray(loaded.events))
   assert.equal(loaded.events.length, log.length)
@@ -63,7 +63,10 @@ test('session open fetches only the chunk hashes missing from the cache', async 
   assert.equal(progress.at(-1)?.loaded, progress.at(-1)?.total)
   const chunkCalls = asked.filter(path => path.startsWith('/snapshot/chunks'))
   assert.ok(chunkCalls.length > 0)
-  assert.equal(chunkCalls.some(path => path.includes(`hash=${encodeURIComponent(kept)}`)), false)
+  assert.equal(
+    chunkCalls.some(path => path.includes(`hash=${encodeURIComponent(kept)}`)),
+    false,
+  )
   const stored = await cache.readEvents('sess')
   assert.equal(stored.length, log.length)
   assert.equal(stored[0]?.seq, 1)
@@ -93,7 +96,7 @@ test('events already cached for the prefix are not fetched again when the chunk 
   })
   await cache.putEvents('sess', rows)
   const asked: string[] = []
-  const progress: Array<{ loaded: number, total: number }> = []
+  const progress: Array<{ loaded: number; total: number }> = []
   const get = async (path: string) => {
     asked.push(path)
     return {
@@ -112,7 +115,10 @@ test('events already cached for the prefix are not fetched again when the chunk 
   assert.equal(loaded.beforeSeq, tail.seq)
   assert.equal(loaded.events?.length, prefix.length)
   assert.equal(seqOf(loaded.events?.[0]), prefix[0]?.seq)
-  assert.equal(loaded.events?.some(event => seqOf(event) === tail.seq), false)
+  assert.equal(
+    loaded.events?.some(event => seqOf(event) === tail.seq),
+    false,
+  )
   assert.deepEqual(asked, ['/snapshot?sessionId=sess&tailMessages=4'])
   assert.deepEqual(progress, [])
 })
@@ -128,7 +134,10 @@ test('a short event cache still fetches the missing prefix chunks', async () => 
   const get = async (path: string) => {
     asked.push(path)
     if (path.startsWith('/snapshot?')) {
-      return { status: 200, body: { ok: true, epoch: plan.epoch, totalSize: plan.totalSize, hashes: plan.hashes, count: log.length } }
+      return {
+        status: 200,
+        body: { ok: true, epoch: plan.epoch, totalSize: plan.totalSize, hashes: plan.hashes, count: log.length },
+      }
     }
     const hashes = [...path.matchAll(/hash=([^&]+)/g)].map(match => decodeURIComponent(match[1]))
     const chunks: Record<string, string> = {}
@@ -220,7 +229,10 @@ test('a json body reports each streamed piece', async () => {
   const response = new Response(stream, { headers: { 'content-length': String(bytes.byteLength) } })
   const seen: number[] = []
   const body = await readJsonStream(response, received => seen.push(received))
-  assert.equal(body !== null && typeof body === 'object' && !Array.isArray(body) && 'ok' in body ? body.ok : false, true)
+  assert.equal(
+    body !== null && typeof body === 'object' && !Array.isArray(body) && 'ok' in body ? body.ok : false,
+    true,
+  )
   assert.deepEqual(seen, [4, bytes.byteLength])
 })
 

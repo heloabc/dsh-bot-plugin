@@ -2,7 +2,11 @@ import { mailLabel, type BotMail } from './bot-message'
 import { useI18n } from './locale'
 import { MarkdownView } from './MarkdownView'
 
-export function BotMessageCard({ mail, label, onOpenFile }: {
+export function BotMessageCard({
+  mail,
+  label,
+  onOpenFile,
+}: {
   mail: BotMail
   label: string
   onOpenFile: (path: string, line?: number) => void
@@ -15,7 +19,9 @@ export function BotMessageCard({ mail, label, onOpenFile }: {
     `from ${mail.from}`,
     mail.correlation ? `correlation ${mail.correlation}` : '',
     mail.causation ? `causation ${mail.causation}` : '',
-  ].filter(Boolean).join('\n')
+  ]
+    .filter(Boolean)
+    .join('\n')
   return (
     <article className="mail-card">
       <header className="mail-head">

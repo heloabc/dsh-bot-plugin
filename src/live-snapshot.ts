@@ -18,7 +18,9 @@ export function stableStringify(value: unknown): string {
   if (value === null || typeof value !== 'object') return JSON.stringify(value) ?? 'null'
   if (Array.isArray(value)) return `[${value.map(item => stableStringify(item)).join(',')}]`
   const record = value as Record<string, unknown>
-  const keys = Object.keys(record).filter(key => record[key] !== undefined).sort()
+  const keys = Object.keys(record)
+    .filter(key => record[key] !== undefined)
+    .sort()
   return `{${keys.map(key => `${JSON.stringify(key)}:${stableStringify(record[key])}`).join(',')}}`
 }
 
@@ -49,7 +51,7 @@ export function followTailStart(events: unknown[], maxMessages: number): number 
   for (let index = list.length - 1; index >= 0; index -= 1) {
     const event = list[index]
     if (!event || typeof event !== 'object') continue
-    const record = event as { type?: unknown, surfaceOp?: unknown, seq?: unknown, sourceEventSeqs?: unknown }
+    const record = event as { type?: unknown; surfaceOp?: unknown; seq?: unknown; sourceEventSeqs?: unknown }
     if (typeof record.type !== 'string' || !MESSAGE_TYPES.has(record.type) || record.surfaceOp !== 'append') continue
     count += 1
     let groupStart = typeof record.seq === 'number' ? record.seq : index

@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto'
-import { toolError } from './errors.ts'
+import { toolError, type ToolPayload } from './errors.ts'
 import { toolDefinitions } from './tools.ts'
 
 /**
@@ -9,7 +9,10 @@ import { toolDefinitions } from './tools.ts'
  * @param {import('./engine.js').Engine} engine
  * @param {{ sessionId?: unknown, personaText?: unknown, fact?: unknown, idempotencyKey?: unknown }} input
  */
-export async function provisionSession(engine, input) {
+export async function provisionSession(
+  engine: import('./engine.ts').Engine,
+  input: { sessionId?: unknown; personaText?: unknown; fact?: unknown; idempotencyKey?: unknown },
+): Promise<ToolPayload> {
   if (typeof input.sessionId !== 'string' || input.sessionId.trim() === '') {
     return toolError('VALIDATION', 'sessionId is required.')
   }
@@ -27,15 +30,20 @@ export async function provisionSession(engine, input) {
   }
   const factText = typeof input.fact === 'string' ? input.fact.trim() : ''
   if (factText === '') return { ok: true, sessionId, fact: null }
-  const key = typeof input.idempotencyKey === 'string' && input.idempotencyKey.trim() !== ''
-    ? input.idempotencyKey.trim()
-    : `provision:${sessionId}:${createHash('sha256').update(factText).digest('hex').slice(0, 16)}`
+  const key =
+    typeof input.idempotencyKey === 'string' && input.idempotencyKey.trim() !== ''
+      ? input.idempotencyKey.trim()
+      : `provision:${sessionId}:${createHash('sha256').update(factText).digest('hex').slice(0, 16)}`
   const remember = toolDefinitions(engine).find(item => item.name === 'foundations_remember')
-  const fact = await remember.execute({
-    target: 'fact',
-    content: factText,
-    idempotencyKey: key,
-  }, { agent: { id: sessionId } })
+  if (!remember) throw new Error('foundations_remember is unavailable.')
+  const fact = await remember.execute(
+    {
+      target: 'fact',
+      content: factText,
+      idempotencyKey: key,
+    },
+    { agent: { id: sessionId } },
+  )
   if (fact?.ok === false) return fact
   return { ok: true, sessionId, fact }
 }
