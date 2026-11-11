@@ -14,8 +14,10 @@ import { createTriggers } from '../src/triggers.ts'
 import { durableFollowup } from '../src/work-durable.ts'
 import { field, present } from './narrow.ts'
 
-function boot() {
+function boot(budget?: Partial<typeof DEFAULT_WORK_BUDGET>) {
   const dir = mkdtempSync(join(tmpdir(), 'sf-work-'))
+  const logs: Array<{ level: string; message: string }> = []
+  const trips: Array<{ sessionId: string; trip: any }> = []
   const store = openStore(dir)
   const engine = createEngine(store)
   const world = createMockWorld()
@@ -37,10 +39,15 @@ function boot() {
         if (scheduled?.fn === fn) scheduled = null
       }
     },
+    log: (level, message) => logs.push({ level, message }),
+    onMainBudget: (sessionId, trip) => trips.push({ sessionId, trip }),
+    ...(budget ? { budget } : {}),
   })
   engine.markBot('bot-a')
   engine.ensureSession('plain-a')
   return {
+    logs,
+    trips,
     dir,
     store,
     engine,
@@ -458,8 +465,8 @@ test('a worker cannot dispatch or send, and a bot cannot report', async () => {
   ctx.close()
 })
 
-test('host budget cancels the main turn with the inbox kept and fails a worker without retry', async () => {
-  const ctx = boot()
+test('main budget refuses the next step at pre-step, and the wall timer cancels with a hook cause', async () => {
+  const ctx = boot({ chatMaxSteps: 4, chatWallMs: 120_000 })
   ctx.work.observeSession('bot-a', { type: 'turn/start', data: { turn: 1 } })
   assert.equal(ctx.scheduled()!.ms, 120_000)
   ctx.work.observeSession('bot-a', {
@@ -468,19 +475,36 @@ test('host budget cancels the main turn with the inbox kept and fails a worker w
   })
   ctx.work.observeSession('bot-a', { type: 'step/end', data: { turn: 1, step: 1 } })
   ctx.work.observeSession('bot-a', { type: 'step/end', data: { turn: 1, step: 3 } })
-  assert.equal(ctx.world.cancels.length, 0)
+  assert.equal(ctx.work.gateStep('bot-a', { turn: 1, step: 4 }).kind, 'enter')
   ctx.work.observeSession('bot-a', { type: 'step/end', data: { turn: 1, step: 4 } })
-  assert.equal(present(ctx.world.cancels.at(-1)).keepInbox, true)
-  assert.equal(present(ctx.world.cancels.at(-1)).sessionId, 'bot-a')
+  // step/end never cancels: the step that just ended may be the natural last one.
+  assert.equal(ctx.world.cancels.length, 0)
+  const refused = ctx.work.gateStep('bot-a', { turn: 1, step: 5 })
+  assert.equal(refused.kind, 'reject')
+  assert.equal(refused.kind === 'reject' && refused.trip.cause, 'main-budget:steps')
+  assert.equal(ctx.world.cancels.length, 0)
+  assert.equal(ctx.trips.length, 1)
+  assert.equal(ctx.trips[0]!.sessionId, 'bot-a')
+  assert.equal(ctx.trips[0]!.trip.notify, true)
+  assert.equal(ctx.trips[0]!.trip.via, 'pre-step')
+  assert.match(ctx.logs.at(-1)!.message, /main budget main-budget:steps session=bot-a turn=1 steps=4\/4/)
+  assert.equal(ctx.logs.at(-1)!.level, 'warn')
+  // A user steer claimed for the step still enters.
+  assert.equal(ctx.work.gateStep('bot-a', { turn: 1, step: 5, claimed: 1 }).kind, 'enter')
+  // Plain sessions are never gated.
   ctx.work.observeSession('plain-a', { type: 'turn/start', data: { turn: 1 } })
-  ctx.work.observeSession('plain-a', { type: 'step/end', data: { turn: 1, step: 4 } })
+  ctx.work.observeSession('plain-a', { type: 'step/end', data: { turn: 1, step: 400 } })
+  assert.equal(ctx.work.gateStep('plain-a', { turn: 1, step: 401 }).kind, 'enter')
   assert.equal(ctx.world.cancels.filter(item => item.sessionId === 'plain-a').length, 0)
 
-  ctx.work.observeSession('bot-a', { type: 'turn/end', data: { turn: 1, reason: { kind: 'aborted' } } })
+  ctx.work.observeSession('bot-a', { type: 'turn/end', data: { turn: 1, reason: { kind: 'blocked' } } })
   ctx.work.observeSession('bot-a', { type: 'turn/start', data: { turn: 2 } })
   assert.equal(ctx.scheduled()!.ms, 120_000)
+  ctx.clock.ms += 120_000
   ctx.scheduled()!.fn()
   assert.equal(present(ctx.world.cancels.at(-1)).keepInbox, true)
+  assert.equal(present(ctx.world.cancels.at(-1)).reason, 'main-budget:wall')
+  assert.equal(ctx.trips.at(-1)!.trip.via, 'timer')
 
   const job = await ctx.work.dispatch('bot-a', {
     briefing: 'a long task',
@@ -494,11 +518,13 @@ test('host budget cancels the main turn with the inbox kept and fails a worker w
     ctx.work.observeSession(job.childSessionId, { type: 'step/end', data: { turn: 1, step } })
   }
   assert.equal(ctx.world.cancels.length, cancels)
+  assert.equal(ctx.work.gateStep(job.childSessionId, { turn: 1, step: 31 }).kind, 'enter')
   assert.notEqual(ctx.work.detail(job.ticketId)!.ticket.status, 'failed')
   assert.equal(ctx.scheduled()!.ms, 600_000)
   ctx.scheduled()!.fn()
   assert.equal(present(ctx.world.cancels.at(-1)).sessionId, job.childSessionId)
   assert.equal(present(ctx.world.cancels.at(-1)).keepInbox, false)
+  assert.equal(present(ctx.world.cancels.at(-1)).reason, 'worker-budget:wall')
   assert.equal(ctx.work.detail(job.ticketId)!.ticket.status, 'failed')
   assert.equal(ctx.work.detail(job.ticketId)!.attempts.length, 1)
   assert.match(
@@ -508,28 +534,65 @@ test('host budget cancels the main turn with the inbox kept and fails a worker w
   ctx.close()
 })
 
-test('dispatch and host tools use the short cap; a recall stays on the chat cap', async () => {
+test('default budget lets the main bot use host tools for many steps and never cancels a finished turn', async () => {
   const ctx = boot()
   ctx.work.observeSession('bot-a', { type: 'turn/start', data: { turn: 1 } })
+  assert.equal(ctx.scheduled()!.ms, 30 * 60_000)
+  // The VPS repro: bash on step 1, a final answer on step 2.
+  ctx.work.observeSession('bot-a', { type: 'tool/call', data: { name: 'bash', arguments: { command: 'date' } } })
+  ctx.work.observeSession('bot-a', { type: 'tool/result', data: { name: 'bash', result: 'Wed' } })
+  ctx.work.observeSession('bot-a', { type: 'step/end', data: { turn: 1, step: 1 } })
+  assert.equal(ctx.work.gateStep('bot-a', { turn: 1, step: 2 }).kind, 'enter')
+  ctx.work.observeSession('bot-a', { type: 'step/end', data: { turn: 1, step: 2 } })
+  ctx.work.observeSession('bot-a', { type: 'turn/end', data: { turn: 1, reason: { kind: 'completed' } } })
+  assert.equal(ctx.world.cancels.length, 0)
+  assert.equal(ctx.trips.length, 0)
+  // A long host-tool turn stays open until step 80.
+  ctx.work.observeSession('bot-a', { type: 'turn/start', data: { turn: 2 } })
+  ctx.work.observeSession('bot-a', { type: 'tool/call', data: { name: 'write', arguments: {} } })
+  ctx.work.observeSession('bot-a', { type: 'tool/call', data: { name: 'foundations_dispatch', arguments: {} } })
+  for (let step = 1; step < 80; step += 1) {
+    ctx.work.observeSession('bot-a', { type: 'step/end', data: { turn: 2, step } })
+    assert.equal(ctx.work.gateStep('bot-a', { turn: 2, step: step + 1 }).kind, 'enter')
+  }
+  ctx.work.observeSession('bot-a', { type: 'step/end', data: { turn: 2, step: 80 } })
+  assert.equal(ctx.world.cancels.length, 0)
+  assert.equal(ctx.work.gateStep('bot-a', { turn: 2, step: 81 }).kind, 'reject')
+  assert.equal(ctx.world.cancels.length, 0)
+  ctx.close()
+})
+
+test('a configured main cap still squeezes dispatch and host tools; a recall stays on the chat cap', async () => {
+  const ctx = boot({ mainMaxSteps: 2, mainWallMs: 20_000, chatMaxSteps: 4, chatWallMs: 120_000 })
+  ctx.work.observeSession('bot-a', { type: 'turn/start', data: { turn: 1 } })
+  ctx.work.observeSession('bot-a', { type: 'tool/call', data: { name: 'foundations_recall', arguments: {} } })
+  assert.equal(ctx.scheduled()!.ms, 120_000)
   ctx.work.observeSession('bot-a', { type: 'tool/call', data: { name: 'bash', arguments: { command: 'ls' } } })
   assert.equal(ctx.scheduled()!.ms, 20_000)
   ctx.work.observeSession('bot-a', { type: 'step/end', data: { turn: 1, step: 1 } })
-  assert.equal(ctx.world.cancels.length, 0)
+  assert.equal(ctx.work.gateStep('bot-a', { turn: 1, step: 2 }).kind, 'enter')
   ctx.work.observeSession('bot-a', { type: 'step/end', data: { turn: 1, step: 2 } })
-  assert.equal(present(ctx.world.cancels.at(-1)).sessionId, 'bot-a')
-  assert.equal(present(ctx.world.cancels.at(-1)).keepInbox, true)
+  assert.equal(ctx.world.cancels.length, 0)
+  assert.equal(ctx.work.gateStep('bot-a', { turn: 1, step: 3 }).kind, 'reject')
 
-  ctx.work.observeSession('bot-a', { type: 'turn/end', data: { turn: 1, reason: { kind: 'aborted' } } })
+  // The notice turn that follows a trip does not post a second notice.
+  ctx.work.observeSession('bot-a', { type: 'turn/end', data: { turn: 1, reason: { kind: 'blocked' } } })
   ctx.work.observeSession('bot-a', { type: 'turn/start', data: { turn: 2 } })
+  ctx.work.observeSession('bot-a', {
+    type: 'user/message',
+    data: { id: 'foundations-budget:1:abc', message: { id: 'foundations-budget:1:abc' } },
+  })
   ctx.work.observeSession('bot-a', {
     type: 'tool/result',
     data: { name: 'foundations_dispatch', result: { ok: true } },
   })
   assert.equal(ctx.scheduled()!.ms, 20_000)
-  const before = ctx.world.cancels.length
   ctx.work.observeSession('bot-a', { type: 'step/end', data: { turn: 2, step: 2 } })
-  assert.equal(ctx.world.cancels.length, before + 1)
-  assert.equal(present(ctx.world.cancels.at(-1)).sessionId, 'bot-a')
+  const second = ctx.work.gateStep('bot-a', { turn: 2, step: 3 })
+  assert.equal(second.kind, 'reject')
+  assert.equal(second.kind === 'reject' && second.trip.notify, false)
+  assert.equal(ctx.trips.length, 1)
+  assert.equal(ctx.logs.filter(line => line.level === 'warn').length, 2)
   ctx.close()
 })
 

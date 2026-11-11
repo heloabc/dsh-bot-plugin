@@ -69,10 +69,10 @@ async function startJob(ctx: any, briefing: any, key: any) {
 test('eval: product defaults reject a second ticket per bot and a third ticket globally', async () => {
   assert.equal(DEFAULT_WORK_BUDGET.perBot, 1)
   assert.equal(DEFAULT_WORK_BUDGET.global, 2)
-  assert.equal(DEFAULT_WORK_BUDGET.mainMaxSteps, 2)
-  assert.equal(DEFAULT_WORK_BUDGET.mainWallMs, 20_000)
-  assert.equal(DEFAULT_WORK_BUDGET.chatMaxSteps, 4)
-  assert.equal(DEFAULT_WORK_BUDGET.chatWallMs, 120_000)
+  assert.equal(DEFAULT_WORK_BUDGET.mainMaxSteps, 80)
+  assert.equal(DEFAULT_WORK_BUDGET.mainWallMs, 30 * 60_000)
+  assert.equal(DEFAULT_WORK_BUDGET.chatMaxSteps, 80)
+  assert.equal(DEFAULT_WORK_BUDGET.chatWallMs, 30 * 60_000)
   const ctx = boot()
   assert.equal(ctx.work.limits.perBot, 1)
   assert.equal(ctx.work.limits.global, 2)
@@ -382,10 +382,14 @@ test('eval: redirect keeps the child and a late old revision cannot become the d
 })
 
 test('eval: main budget cancel keeps the next user message', async () => {
-  const ctx = boot()
+  const ctx = boot({ mainMaxSteps: 2, mainWallMs: 20_000 })
   ctx.work.observeSession('bot-a', { type: 'turn/start', data: { turn: 1 } })
   ctx.work.observeSession('bot-a', { type: 'tool/call', data: { name: 'foundations_dispatch', arguments: {} } })
   ctx.work.observeSession('bot-a', { type: 'step/end', data: { turn: 1, step: 2 } })
+  assert.equal(ctx.world.cancels.length, 0)
+  ctx.clock.ms += 20_000
+  ctx.scheduled()!.fn()
+  assert.equal(present(ctx.world.cancels.at(-1)).reason, 'main-budget:wall')
   assert.equal(present(ctx.world.cancels.at(-1)).keepInbox, true)
   assert.equal(present(ctx.world.cancels.at(-1)).sessionId, 'bot-a')
   const userId = ctx.world.postUser('bot-a', 'the line after the budget cancel')

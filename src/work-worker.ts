@@ -35,6 +35,8 @@ type BudgetArm = {
   tight: boolean
   limits: { maxSteps: number; wallMs: number; maxTokens: number; ceilingWall: number; ceilingTokens: number }
   tripped: boolean
+  /** This turn was woken by a [foundations:budget] notice, so a second trip does not post another. */
+  budgetNotice: boolean
   extensionOpen: boolean
   closing: boolean
   clear: () => void
@@ -55,7 +57,15 @@ type WorkHostOptions = {
   logHas?: (sessionId: string, messageId: string) => Promise<boolean> | boolean
   remove?: (sessionId: string, messageId: string) => Promise<boolean> | boolean
   pendingIds?: (sessionId: string) => Promise<string[] | null> | string[] | null
-  cancel?: (sessionId: string, options: { keepInbox?: boolean }) => Promise<void> | void
+  /**
+   * Stop a running turn. `reason` becomes the DSH cancel cause
+   * `{ kind: 'hook', reason }`; it is never reported as a user cancel.
+   */
+  cancel?: (sessionId: string, options: { keepInbox?: boolean; reason?: string }) => Promise<void> | void
+  /** Host log sink. A budget trip is always logged at warn. */
+  log?: (level: 'info' | 'warn', message: string, fields?: Record<string, unknown>) => void
+  /** Called once per main-session budget trip so the host can tell the user. */
+  onMainBudget?: (sessionId: string, trip: MainBudgetTrip) => void
   snapshot?: (sessionId: string) => Promise<Array<Record<string, any>>> | Array<Record<string, any>>
   resident?: boolean
   pid?: number
@@ -63,6 +73,24 @@ type WorkHostOptions = {
   budget?: Partial<typeof DEFAULT_WORK_BUDGET>
   schedule?: (fn: () => void, ms: number) => () => void
 }
+
+export type MainBudgetTrip = {
+  reason: 'steps' | 'wall'
+  /** `main-budget:steps` or `main-budget:wall`; the DSH cancel/hook reason. */
+  cause: string
+  turn: number
+  steps: number
+  elapsedMs: number
+  maxSteps: number
+  wallMs: number
+  /** `pre-step` = the next step was refused; `timer` = a running step was cancelled at the wall cap. */
+  via: 'pre-step' | 'timer'
+  /** False when this turn was itself a budget notice, so the host should not post another one. */
+  notify: boolean
+}
+
+/** Message id prefix of the inbox notice sent after a main-session budget trip. */
+export const BUDGET_NOTICE_PREFIX = 'foundations-budget:'
 
 /**
  * Host-side ticket protocol. The model is not called from here.
@@ -128,6 +156,7 @@ export function createWorkRuntime(
     admit,
     observeSession,
     observeClaimed,
+    gateStep,
     isWorkerSession,
     summaries: (owner: string) => book.summaries(owner),
     detail: (id: string) => book.detail(id),
@@ -269,7 +298,7 @@ export function createWorkRuntime(
     if (cancelled.error) return toolError(cancelled.error, cancelled.message ?? 'Cancel failed.')
     const child = cancelled.ticket.child_session_id
     if (resident && child && options.cancel) {
-      await options.cancel(child, { keepInbox: note !== '' })
+      await options.cancel(child, { keepInbox: note !== '', reason: 'ticket-cancel' })
     }
     if (resident && note !== '' && cancelled.input) await pushInput(book, cancelled.input, deps)
     await removeUnclaimed(owner, cancelled.ticket.id)
@@ -297,7 +326,7 @@ export function createWorkRuntime(
         state.closing = true
         state.clear?.()
       }
-      if (resident && child && options.cancel) await options.cancel(child, { keepInbox: false })
+      if (resident && child && options.cancel) await options.cancel(child, { keepInbox: false, reason: 'grant-denied' })
       return { ok: true, ticketId: found.ticket.id, ticketStatus: 'failed', denied: true }
     }
     const added = await store.write('work', () =>
@@ -892,6 +921,15 @@ export function createWorkRuntime(
       return
     }
     const state = arms.get(sessionId)
+    if (
+      role === 'main' &&
+      state &&
+      (event.type === 'user/message' || event.type === 'agent/inbox/claimed') &&
+      (messageIdOf(event) ?? '').startsWith(BUDGET_NOTICE_PREFIX)
+    ) {
+      state.budgetNotice = true
+      return
+    }
     if (event.type === 'assistant/message' && role === 'worker' && state) {
       const seq = typeof event.seq === 'number' ? event.seq : null
       if (seq != null && state.lastSeq != null && seq <= state.lastSeq) return
@@ -907,7 +945,81 @@ export function createWorkRuntime(
     const live = state ?? arm(sessionId, event.data?.turn ?? 0, role)
     const step = Number(event.data?.step)
     live.steps = Number.isFinite(step) ? Math.max(live.steps, step) : live.steps + 1
-    if (role === 'main') consider(sessionId, live, false)
+    // The main step cap is enforced in gateStep (agent/pre-step), before the next
+    // step starts. Cancelling here would abort a turn whose last step already
+    // ended naturally and record it as aborted.
+  }
+
+  /**
+   * `agent/pre-step` gate for a bot main session. Refuses the next step once the
+   * turn has used its step or wall budget. A turn whose last step ended without
+   * a tool call never reaches this gate, so it still ends `completed`.
+   * Messages claimed for this step (a user steer) always enter: dropping them on
+   * a refusal would lose user input.
+   * @param {string} sessionId
+   * @param {{ turn?: number, step?: number, claimed?: number }} position
+   */
+  function gateStep(
+    sessionId: string,
+    position: { turn?: number; step?: number; claimed?: number } = {},
+  ): { kind: 'enter' } | { kind: 'reject'; trip: MainBudgetTrip } {
+    if (budgetRole(sessionId) !== 'main') return { kind: 'enter' }
+    const state = arms.get(sessionId)
+    if (!state || state.role !== 'main' || state.closing) return { kind: 'enter' }
+    if ((position.claimed ?? 0) > 0) return { kind: 'enter' }
+    const elapsed = Math.max(0, now().getTime() - state.startedAt)
+    const reason = budgetTrip({
+      steps: state.steps,
+      elapsedMs: elapsed,
+      maxSteps: state.limits.maxSteps,
+      wallMs: state.limits.wallMs,
+    })
+    if (reason !== 'steps' && reason !== 'wall') return { kind: 'enter' }
+    const trip = tripMain(sessionId, state, reason, elapsed, 'pre-step')
+    return { kind: 'reject', trip }
+  }
+
+  /**
+   * Record, log, and announce one main-session budget trip.
+   * @param {string} sessionId
+   * @param {BudgetArm} state
+   * @param {'steps' | 'wall'} reason
+   * @param {number} elapsed
+   * @param {'pre-step' | 'timer'} via
+   */
+  function tripMain(
+    sessionId: string,
+    state: BudgetArm,
+    reason: 'steps' | 'wall',
+    elapsed: number,
+    via: 'pre-step' | 'timer',
+  ): MainBudgetTrip {
+    const trip: MainBudgetTrip = {
+      reason,
+      cause: `main-budget:${reason}`,
+      turn: state.turn,
+      steps: state.steps,
+      elapsedMs: elapsed,
+      maxSteps: state.limits.maxSteps,
+      wallMs: state.limits.wallMs,
+      via,
+      notify: !state.budgetNotice,
+    }
+    if (state.tripped) return { ...trip, notify: false }
+    state.tripped = true
+    options.log?.(
+      'warn',
+      `session-foundations: main budget ${trip.cause} session=${sessionId} turn=${trip.turn} steps=${trip.steps}/${trip.maxSteps} elapsedMs=${trip.elapsedMs}/${trip.wallMs} via=${via}`,
+      { sessionId, ...trip },
+    )
+    if (trip.notify) {
+      try {
+        options.onMainBudget?.(sessionId, trip)
+      } catch {
+        /* the notice is best effort; the log line above stays */
+      }
+    }
+    return trip
   }
 
   /**
@@ -940,18 +1052,22 @@ export function createWorkRuntime(
   }
 
   /**
-   * A dispatch or a host tool leaves the chat budget and uses the short cap.
+   * A dispatch or a host tool moves the turn onto the `main*` cap. The cap can
+   * only tighten: with the defaults (main == chat) this changes nothing.
    * @param {string} sessionId
    */
   function tightenMain(sessionId: string) {
     const state = arms.get(sessionId)
     if (!state || state.role !== 'main' || state.tight || state.closing || state.tripped) return
     state.tight = true
+    const maxSteps = Math.min(state.limits.maxSteps, limits.mainMaxSteps)
+    const wallMs = Math.min(state.limits.wallMs, limits.mainWallMs)
+    if (maxSteps === state.limits.maxSteps && wallMs === state.limits.wallMs) return
     state.limits = {
       ...state.limits,
-      maxSteps: limits.mainMaxSteps,
-      wallMs: limits.mainWallMs,
-      ceilingWall: limits.mainWallMs,
+      maxSteps,
+      wallMs,
+      ceilingWall: wallMs,
     }
     state.clear?.()
     const elapsed = Math.max(0, now().getTime() - state.startedAt)
@@ -995,6 +1111,7 @@ export function createWorkRuntime(
       tight: false,
       limits: caps,
       tripped: false,
+      budgetNotice: false,
       extensionOpen: false,
       closing: false,
       clear: () => {},
@@ -1052,16 +1169,13 @@ export function createWorkRuntime(
   function consider(sessionId: string, state: BudgetArm, fromTimer: boolean) {
     if (state.closing) return
     if (state.role === 'main') {
-      const elapsed = fromTimer ? state.limits.wallMs : now().getTime() - state.startedAt
-      const reason = budgetTrip({
-        steps: state.steps,
-        elapsedMs: elapsed,
-        maxSteps: state.limits.maxSteps,
-        wallMs: state.limits.wallMs,
-      })
-      if (!reason || state.tripped) return
-      state.tripped = true
-      Promise.resolve(options.cancel?.(sessionId, { keepInbox: true })).catch(() => {})
+      // Step caps are enforced by gateStep before the next step. Only the wall
+      // timer stops a step that is still running; the arm is cleared on
+      // turn/end, so a finished turn is never cancelled here.
+      if (!fromTimer || state.tripped) return
+      const elapsed = Math.max(state.limits.wallMs, now().getTime() - state.startedAt)
+      const trip = tripMain(sessionId, state, 'wall', elapsed, 'timer')
+      Promise.resolve(options.cancel?.(sessionId, { keepInbox: true, reason: trip.cause })).catch(() => {})
       return
     }
     const elapsed = Math.max(0, now().getTime() - state.startedAt)
@@ -1159,7 +1273,9 @@ export function createWorkRuntime(
     if (state.closing) return
     state.closing = true
     state.clear?.()
-    Promise.resolve(options.cancel?.(sessionId, { keepInbox: false })).catch(() => {})
+    Promise.resolve(options.cancel?.(sessionId, { keepInbox: false, reason: `worker-budget:${reason}` })).catch(
+      () => {},
+    )
     const attempt = book.attemptForChild(sessionId)
     if (attempt) book.failRunning(attempt.ticket_id, reason)
   }

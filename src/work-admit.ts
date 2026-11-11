@@ -16,11 +16,17 @@ export interface WorkBudget {
   mergeWindowMs: number
 }
 
+/**
+ * Main-session caps. The main bot may do real work itself (bash, write, ...),
+ * so the caps are a runaway guard, not a "dispatch first" policy. `main*` is
+ * the cap after a dispatch or a host tool and is never looser than `chat*`;
+ * set it lower in config to bring back the old "hand long work to a worker" squeeze.
+ */
 export const DEFAULT_WORK_BUDGET: WorkBudget = Object.freeze({
-  mainMaxSteps: 2,
-  mainWallMs: 20_000,
-  chatMaxSteps: 4,
-  chatWallMs: 120_000,
+  mainMaxSteps: 80,
+  mainWallMs: 30 * 60 * 1000,
+  chatMaxSteps: 80,
+  chatWallMs: 30 * 60 * 1000,
   holdMs: 15_000,
   workerMaxSteps: 8,
   workerWallMs: 10 * 60 * 1000,
@@ -31,6 +37,109 @@ export const DEFAULT_WORK_BUDGET: WorkBudget = Object.freeze({
   starveMs: 30_000,
   mergeWindowMs: 1_000,
 })
+
+const BUDGET_KEYS = Object.keys(DEFAULT_WORK_BUDGET) as Array<keyof WorkBudget>
+
+/** Environment variable the launcher uses to pass `--work-budget` to the plugin. */
+export const WORK_BUDGET_ENV = 'DSH_BOT_WORK_BUDGET'
+
+/**
+ * Milliseconds from a number or a `90s` / `30m` / `2h` / `1500ms` string.
+ * @param {unknown} value
+ */
+function durationMs(value: unknown) {
+  if (typeof value === 'number') return value
+  if (typeof value !== 'string') return Number.NaN
+  const match = /^\s*(\d+(?:\.\d+)?)\s*(ms|s|m|h)?\s*$/i.exec(value)
+  if (!match) return Number.NaN
+  const unit = (match[2] ?? 'ms').toLowerCase()
+  const scale = unit === 'h' ? 3_600_000 : unit === 'm' ? 60_000 : unit === 's' ? 1000 : 1
+  return Number(match[1]) * scale
+}
+
+/**
+ * Keep only known, positive, finite budget fields. Unknown keys and bad values
+ * are dropped (and listed in `ignored`) so a typo never zeroes a cap.
+ * Shorthands: `steps` sets mainMaxSteps and chatMaxSteps; `wall` sets mainWallMs and chatWallMs.
+ * Fields ending in `Ms` accept duration strings such as `30m`.
+ * @param {unknown} input
+ */
+export function normalizeWorkBudget(input: unknown): { budget: Partial<WorkBudget>; ignored: string[] } {
+  const budget: Partial<WorkBudget> = {}
+  const ignored: string[] = []
+  if (input == null || typeof input !== 'object' || Array.isArray(input)) return { budget, ignored }
+  const raw = { ...(input as Record<string, unknown>) }
+  const expanded: Record<string, unknown> = {}
+  if ('steps' in raw) {
+    expanded.mainMaxSteps = raw.steps
+    expanded.chatMaxSteps = raw.steps
+    delete raw.steps
+  }
+  if ('wall' in raw) {
+    expanded.mainWallMs = raw.wall
+    expanded.chatWallMs = raw.wall
+    delete raw.wall
+  }
+  Object.assign(expanded, raw)
+  for (const [key, value] of Object.entries(expanded)) {
+    if (!(BUDGET_KEYS as string[]).includes(key)) {
+      ignored.push(key)
+      continue
+    }
+    const number = key.endsWith('Ms') ? durationMs(value) : Number(value)
+    if (!Number.isFinite(number) || number <= 0) {
+      ignored.push(key)
+      continue
+    }
+    budget[key as keyof WorkBudget] = Math.floor(number)
+  }
+  return { budget, ignored }
+}
+
+/**
+ * Parse `--work-budget` / DSH_BOT_WORK_BUDGET: JSON (`{"steps":80,"wall":"30m"}`)
+ * or comma-separated `key=value` (`steps=80,wall=30m,mainMaxSteps=10`).
+ * @param {string | undefined} text
+ */
+export function parseWorkBudget(text: string | undefined | null): { budget: Partial<WorkBudget>; ignored: string[] } {
+  const source = typeof text === 'string' ? text.trim() : ''
+  if (source === '') return { budget: {}, ignored: [] }
+  if (source.startsWith('{')) {
+    try {
+      return normalizeWorkBudget(JSON.parse(source))
+    } catch {
+      return { budget: {}, ignored: [source] }
+    }
+  }
+  const object: Record<string, string> = {}
+  const ignored: string[] = []
+  for (const part of source.split(',')) {
+    const piece = part.trim()
+    if (piece === '') continue
+    const eq = piece.indexOf('=')
+    if (eq <= 0) {
+      ignored.push(piece)
+      continue
+    }
+    object[piece.slice(0, eq).trim()] = piece.slice(eq + 1).trim()
+  }
+  const normalized = normalizeWorkBudget(object)
+  return { budget: normalized.budget, ignored: [...ignored, ...normalized.ignored] }
+}
+
+/**
+ * Defaults, then the environment (launcher `--work-budget`), then plugin config `work`.
+ * @param {unknown} config
+ * @param {string | undefined} envText
+ */
+export function resolveWorkBudget(config: unknown, envText: string | undefined | null) {
+  const fromEnv = parseWorkBudget(envText)
+  const fromConfig = normalizeWorkBudget(config)
+  return {
+    budget: { ...DEFAULT_WORK_BUDGET, ...fromEnv.budget, ...fromConfig.budget } as WorkBudget,
+    ignored: [...fromEnv.ignored, ...fromConfig.ignored],
+  }
+}
 
 /**
  * Pending next-turn ids whose source is not a ticket notice and not a delivery.
