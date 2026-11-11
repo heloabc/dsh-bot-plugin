@@ -11,7 +11,7 @@ export function createMockWorld() {
     { nextTurn: Array<{ id: string; text: string }>; events: Array<Record<string, any>>; seq: number; turn: number }
   > = new Map()
   const calls: Array<Record<string, unknown>> = []
-  const cancels: Array<{ sessionId: string; keepInbox: boolean }> = []
+  const cancels: Array<{ sessionId: string; keepInbox: boolean; reason?: string }> = []
   const pushes: Array<{ sessionId: string; messageId: string; text: string }> = []
   const state = {
     failCreate: false,
@@ -103,8 +103,12 @@ export function createMockWorld() {
       slot.nextTurn.splice(index, 1)
       return true
     },
-    async cancel(sessionId: string, options: { keepInbox?: boolean } | null) {
-      cancels.push({ sessionId, keepInbox: options?.keepInbox === true })
+    async cancel(sessionId: string, options: { keepInbox?: boolean; reason?: string } | null) {
+      cancels.push({
+        sessionId,
+        keepInbox: options?.keepInbox === true,
+        ...(typeof options?.reason === 'string' ? { reason: options.reason } : {}),
+      })
     },
     async snapshot(sessionId: string) {
       return session(sessionId).events.map(event => ({ ...event, data: event.data }))

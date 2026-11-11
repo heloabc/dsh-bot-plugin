@@ -38,7 +38,7 @@ export interface HostContext {
   systemPrompt?: any
   tools?: any
   agentPresets?: any
-  logger?: { info?(...args: any[]): void }
+  logger?: { info?(...args: any[]): void; warn?(...args: any[]): void }
   on?(event: string, listener: (...args: any[]) => any): any
   get?(name: string): any
   agentDefaultModel?: { currentSelection?(): any }

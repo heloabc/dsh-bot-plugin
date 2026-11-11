@@ -9,12 +9,23 @@ import { followupDurable, liveAgent, logHasMessage, removePending, sessionEvents
 import { toolError } from './errors.ts'
 import { publishRuntime, publishWorkRuntime, runtimeFor } from './runtime-registry.ts'
 import { type HostContext, type PluginHost } from './host.ts'
-import { childCreateOptions, type WorkBudget } from './work-admit.ts'
+import { childCreateOptions, resolveWorkBudget, WORK_BUDGET_ENV, type WorkBudget } from './work-admit.ts'
 import { ensureWorkerFilePreset, WORKER_FILE_PRESET, workerFileSetup } from './work-child.ts'
-import { createWorkRuntime } from './work-worker.ts'
+import { BUDGET_NOTICE_PREFIX, createWorkRuntime, type MainBudgetTrip } from './work-worker.ts'
 import { workToolDefinitions } from './work-tools.ts'
 
 export const name = 'session-foundations'
+
+type FoundationsConfig = {
+  dataDir?: string
+  contextWindow?: number
+  traceEvents?: boolean
+  timerTickMs?: number
+  /** Budget overrides. Applied over DSH_BOT_WORK_BUDGET (launcher --work-budget), which is applied over the defaults. */
+  work?: Partial<WorkBudget>
+  /** Post a [foundations:budget] notice after a main-session budget trip. Default true. */
+  budgetNotice?: boolean
+}
 // Cordis throws if a plugin reads a service it did not inject. Crash recovery reads the session log through this one.
 export const inject = ['systemPrompt', 'tools', 'sessions', 'agents', 'agentPresets', 'sessionPersistence']
 
@@ -22,16 +33,7 @@ export const inject = ['systemPrompt', 'tools', 'sessions', 'agents', 'agentPres
  * @param {import('./host.ts').PluginHost} ctx
  * @param {{ dataDir?: string, contextWindow?: number, traceEvents?: boolean, timerTickMs?: number }} [config]
  */
-export function apply(
-  ctx: PluginHost,
-  config: {
-    dataDir?: string
-    contextWindow?: number
-    traceEvents?: boolean
-    timerTickMs?: number
-    work?: Partial<WorkBudget>
-  } = {},
-) {
+export function apply(ctx: PluginHost, config: FoundationsConfig = {}) {
   const dataDir = config.dataDir ?? (ctx.profileContext?.dir ? join(ctx.profileContext.dir, 'session-foundations') : '')
   if (dataDir === '') throw new Error('session-foundations: pass dataDir or launch with dsh profileContext')
   const store = openStore(dataDir)
@@ -225,6 +227,26 @@ export function apply(
   }
   if (work) {
     for (const definition of workToolDefinitions(work, engine)) ctx.tools.register(definition)
+    const gate = work
+    // Main-session step budget: refuse the next step instead of cancelling a
+    // step that already ended. A refused step ends the turn as `blocked`.
+    ctx.on(
+      'agent/pre-step',
+      (
+        payload: { agent?: { id?: string }; turn?: number; step?: number; messages?: unknown[] } | null,
+        next: () => Promise<unknown>,
+      ) => {
+        const sessionId = payload?.agent?.id
+        if (typeof sessionId !== 'string' || sessionId === '') return next()
+        const decision = gate.gateStep(sessionId, {
+          turn: payload?.turn,
+          step: payload?.step,
+          claimed: Array.isArray(payload?.messages) ? payload.messages.length : 0,
+        })
+        if (decision.kind === 'reject') return Promise.resolve({ kind: 'reject' })
+        return next()
+      },
+    )
   }
   if (triggers || work) {
     const timer = setInterval(() => {
@@ -292,19 +314,37 @@ function startWork(
   ctx: PluginHost,
   store: import('./store.ts').Store,
   engine: import('./engine.ts').Engine,
-  config: {
-    dataDir?: string
-    contextWindow?: number
-    traceEvents?: boolean
-    timerTickMs?: number
-    work?: Partial<WorkBudget>
-  },
+  config: FoundationsConfig,
 ) {
   /** @type {Map<string, { dispose?: () => Promise<void> }>} */
   const workerHandles: Map<string, { dispose?: () => Promise<void> }> = new Map()
   const filePreset = ensureWorkerFilePreset(ctx)
+  const resolved = resolveWorkBudget(config.work ?? {}, process.env[WORK_BUDGET_ENV])
+  if (resolved.ignored.length > 0) {
+    ctx.logger?.warn?.('session-foundations: ignored work budget keys %s', resolved.ignored.join(','))
+  }
+  ctx.logger?.info?.(
+    'session-foundations: main budget chat=%s steps/%sms main=%s steps/%sms',
+    resolved.budget.chatMaxSteps,
+    resolved.budget.chatWallMs,
+    resolved.budget.mainMaxSteps,
+    resolved.budget.mainWallMs,
+  )
   const work = createWorkRuntime(store, engine, {
-    budget: config.work ?? {},
+    budget: resolved.budget,
+    log: (level, message) => {
+      const sink = level === 'warn' ? (ctx.logger?.warn ?? ctx.logger?.info) : ctx.logger?.info
+      sink?.call(ctx.logger, message)
+      // DSH 0.2.2-rc.1 does not print plugin ctx.logger output by default, so a
+      // budget trip also goes to stderr (journald under systemd). No secrets.
+      if (level === 'warn') console.warn(message)
+    },
+    onMainBudget: (sessionId, trip) => {
+      if (config.budgetNotice === false) return
+      postBudgetNotice(ctx, sessionId, trip).catch(error => {
+        ctx.logger?.warn?.('session-foundations: budget notice failed session=%s %s', sessionId, String(error))
+      })
+    },
     createChild: async spec => {
       let cwd = ''
       let model = null
@@ -347,7 +387,12 @@ function startWork(
     cancel: async (sessionId, options) => {
       const agent = liveAgent(ctx, sessionId)
       if (!agent) return
-      agent.cancel({ kind: 'user' }, { keepInbox: options.keepInbox === true })
+      // Never report a host cancel as a user cancel: the turn records
+      // { kind: 'aborted', reason: { kind: 'hook', reason } }.
+      agent.cancel(
+        { kind: 'hook', reason: options.reason || 'session-foundations' },
+        { keepInbox: options.keepInbox === true },
+      )
     },
     snapshot: async sessionId => {
       try {
@@ -373,6 +418,41 @@ function startWork(
     },
   )
   return work
+}
+
+/**
+ * Text of the inbox notice that follows a main-session budget trip.
+ * @param {MainBudgetTrip} trip
+ */
+export function budgetNoticeText(trip: MainBudgetTrip) {
+  const seconds = Math.round(trip.elapsedMs / 1000)
+  const what =
+    trip.reason === 'steps'
+      ? `it reached the step limit (${trip.steps}/${trip.maxSteps} steps)`
+      : `it reached the time limit (${seconds}s of ${Math.round(trip.wallMs / 1000)}s)`
+  return [
+    '[foundations:budget]',
+    `The previous turn (turn ${trip.turn}) was stopped by the bot host because ${what}. The user did not cancel it.`,
+    `cause: ${trip.cause}`,
+    'In one short message, tell the user the turn was cut off by the budget and what is already done.',
+    'If work remains, call foundations_dispatch with a briefing for the remaining work so a worker continues it, and say so. Otherwise ask the user whether to continue.',
+  ].join('\n')
+}
+
+/**
+ * Wait until the stopped turn is idle, then post the notice as a next-turn
+ * message. Posting while the turn is still unwinding could leave it unclaimed.
+ * @param {import('./host.ts').HostContext} ctx
+ * @param {string} sessionId
+ * @param {MainBudgetTrip} trip
+ */
+async function postBudgetNotice(ctx: HostContext, sessionId: string, trip: MainBudgetTrip) {
+  const agent = liveAgent(ctx, sessionId)
+  if (!agent) return
+  await new Promise(resolve => setImmediate(resolve))
+  if (typeof agent.whenIdle === 'function') await agent.whenIdle()
+  const messageId = `${BUDGET_NOTICE_PREFIX}${trip.turn}:${Date.now().toString(36)}`
+  await followupDurable(ctx, sessionId, messageId, budgetNoticeText(trip))
 }
 
 /**

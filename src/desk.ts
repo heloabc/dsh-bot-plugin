@@ -1,7 +1,7 @@
 /** Workbench routes inside the DSH process. The browser calls /dsh-bot/api. */
 
-import { readFileSync } from 'node:fs'
-import { dirname, join } from 'node:path'
+import { mkdirSync, readFileSync } from 'node:fs'
+import { dirname, join, resolve } from 'node:path'
 import { openLedger, validIdempotencyKey } from './desk-ledger.ts'
 import { openSessionPreviews } from './session-previews.ts'
 import { purgeSessionFiles, sessionDirectory, writeBotMarker } from './session-files.ts'
@@ -18,6 +18,28 @@ export type DeskRequest = {
   socket?: { remoteAddress?: string; localPort?: number; localAddress?: string }
   method?: string
   url?: string
+}
+
+/**
+ * Working directory for workbench-created sessions. THREADY_SESSION_CWD wins;
+ * otherwise <DSH_HOME>/workspace, so the model does not start inside DSH_HOME
+ * (owner-token, profiles/, persona.sqlite). Empty only when neither is set,
+ * which keeps DSH's own default (the server process cwd).
+ * @param {Record<string, string | undefined>} env
+ * @param {{ mkdir?: boolean }} [options]
+ */
+export function defaultSessionCwd(env: Record<string, string | undefined>, options: { mkdir?: boolean } = {}) {
+  const explicit = (env.THREADY_SESSION_CWD ?? '').trim()
+  const home = (env.DSH_HOME ?? '').trim()
+  const cwd = explicit !== '' ? resolve(explicit) : home !== '' ? join(resolve(home), 'workspace') : ''
+  if (cwd !== '' && options.mkdir !== false) {
+    try {
+      mkdirSync(cwd, { recursive: true, mode: 0o700 })
+    } catch {
+      /* session/create reports a bad cwd */
+    }
+  }
+  return cwd
 }
 
 const API = '/session-foundations/api'

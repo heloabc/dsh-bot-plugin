@@ -1,7 +1,7 @@
 import { createReadStream, statSync } from 'node:fs'
 import { dirname, extname, join, resolve, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { createDesk, type DeskRequest } from './desk.ts'
+import { createDesk, defaultSessionCwd, type DeskRequest } from './desk.ts'
 import type { HostContext } from './host.ts'
 import { toolError } from './errors.ts'
 import { sessionEvents } from './inbox.ts'
@@ -33,7 +33,7 @@ export function registerHttp(
       : createDesk({
           ledgerFile: join(storeDir, 'desk-ledger.json'),
           profileDir,
-          sessionCwd: (process.env.THREADY_SESSION_CWD ?? '').trim(),
+          sessionCwd: defaultSessionCwd(process.env),
           isBot: sessionId => engine.isBot(sessionId),
           mark: sessionId => engine.markBot(sessionId),
           hold: sessionId => {
