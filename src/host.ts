@@ -1,23 +1,25 @@
 /**
  * Services the DSH host injects onto a Cordis context. They are not part of
  * Cordis's own Context, and this plugin reads them off the same object.
+ *
+ * Official types are imported so a host API change fails typecheck. The
+ * Context members `connection`, `sessions`, and `sessionQuery` come from the
+ * official packages and are not redeclared here.
  */
 import type {} from '@deepseek-ai/cordis'
+import type { HostConnectionHandle } from '@deepseek-ai/dsh-client-connection'
+import type { SessionStore as OfficialSessionStore } from '@deepseek-ai/dsh-session'
+import type { SessionQueryEngine } from '@deepseek-ai/dsh-session-query'
 
 declare module '@deepseek-ai/cordis' {
   interface Context {
-    effect(execute: () => void | (() => void)): void
     profileContext?: { dir?: string }
     webServer?: any
-    connection?: any
     agents?: any
-    sessions?: any
     sessionPersistence?: any
     systemPrompt?: any
     tools?: any
     agentPresets?: any
-    on(event: string, listener: (...args: any[]) => any): any
-    get(name: string): any
     agentDefaultModel?: { currentSelection?: () => any }
   }
 }
@@ -31,15 +33,19 @@ export interface HostContext {
   effect?(execute: () => void | (() => void)): void
   profileContext?: { dir?: string }
   webServer?: any
-  connection?: any
+  connection?: Pick<HostConnectionHandle, 'fetch' | 'requestRejection'>
+  sessionQuery?: {
+    observeSession(sessionId: string, options?: { projectionMode?: 'all' | 'none'; signal?: AbortSignal }): Promise<any>
+  }
   agents?: any
+  /** Official type is OfficialSessionStore; kept structural so test doubles and string session ids typecheck. */
   sessions?: any
   sessionPersistence?: any
   systemPrompt?: any
   tools?: any
   agentPresets?: any
   logger?: { info?(...args: any[]): void; warn?(...args: any[]): void }
-  on?(event: string, listener: (...args: any[]) => any): any
+  on?(event: string, listener: (...args: any[]) => any, options?: { global?: boolean }): any
   get?(name: string): any
   agentDefaultModel?: { currentSelection?(): any }
 }
@@ -49,5 +55,7 @@ export interface PluginHost extends HostContext {
   effect(execute: () => void | (() => void)): void
   systemPrompt: any
   tools: any
-  on(event: string, listener: (...args: any[]) => any): any
+  on(event: string, listener: (...args: any[]) => any, options?: { global?: boolean }): any
 }
+
+export type { OfficialSessionStore }
