@@ -16,7 +16,7 @@ export type SessionAddress =
       readonly mode: 'one-shot' | 'continuable' | 'unknown'
     }
 
-export type SyncPhase = 'restoring' | 'syncing' | 'live' | 'stalled' | 'error' | 'closed'
+export type SyncPhase = 'restoring' | 'connecting' | 'syncing' | 'live' | 'stalled' | 'error' | 'closed'
 
 export interface SyncProgress {
   appliedSeq: number

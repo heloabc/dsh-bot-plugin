@@ -1,22 +1,26 @@
 import {
   CDC_MIN_BYTES,
+  LIVENESS_CHECK_MS,
   OPENING_MESSAGES,
   POLL_MS,
   RANGE_MAX_EVENTS,
   RECONNECT_MAX_MS,
   RECONNECT_MIN_MS,
+  RESUME_DEBOUNCE_MS,
+  RESUME_RESYNC_HIDDEN_MS,
+  RESUME_SILENT_MS,
   WS_DEGRADE_AFTER,
 } from './constants.ts'
 import { Sequencer } from './sequencer.ts'
 import { probeEnhancement } from './range.ts'
-import type { BoundedTransport, LiveTransport, TransportSink } from './transport.ts'
+import { browserResumeSource, documentHidden, type ResumeInfo, type ResumeSource } from './resume.ts'
+import type { BoundedTransport, FollowOpenedInfo, LiveTransport, TransportSink } from './transport.ts'
 import type { CheckpointStore } from './checkpoint.ts'
 import type {
   EventLogReader,
   EventLogReaderOptions,
   LogBatch,
   Subscription,
-  SyncPhase,
   SyncResult,
   SyncStatus,
 } from './reader-types.ts'
@@ -30,6 +34,7 @@ export type {
   SyncResult,
   SyncStatus,
 } from './reader-types.ts'
+export type { ResumeInfo, ResumeReason, ResumeSource } from './resume.ts'
 
 export interface EventLogReaderDeps {
   follow: LiveTransport
@@ -43,7 +48,16 @@ export interface EventLogReaderDeps {
   random?: () => number
   raf?: (cb: () => void) => unknown
   cancelRaf?: (id: unknown) => void
-  onVisibility?: (cb: () => void) => () => void
+  /**
+   * Page resume signal (visible again, bfcache restore, back online, focus).
+   * Defaults to the browser's visibilitychange/pageshow/online/focus events; a no-op outside a browser.
+   */
+  onResume?: ResumeSource
+  /** Whether the page is hidden right now. Defaults to `document.visibilityState === 'hidden'`. */
+  isHidden?: () => boolean
+  now?: () => number
+  /** Interval for the visible-tab follow liveness check; `false` disables it. */
+  livenessMs?: number | false
 }
 
 export function createEventLogReader(deps: EventLogReaderDeps): EventLogReader {
@@ -72,13 +86,23 @@ function openSubscription(deps: EventLogReaderDeps, sessionId: string, options: 
   }
   let queued: LogEvent[] = []
   let fromCache = false
-  let raf: unknown = null
+  // Pending flush: rAF while visible; a timer while hidden, because rAF does not run in background tabs.
+  let raf: { kind: 'raf' | 'timer'; id: unknown } | null = null
   const rafImpl =
     deps.raf ??
     (typeof requestAnimationFrame === 'function' ? requestAnimationFrame : (cb: () => void) => setTimeout(cb, 0))
-  const cancelRaf = deps.cancelRaf ?? (typeof cancelAnimationFrame === 'function' ? cancelAnimationFrame : clearTimeout)
+  const cancelRafImpl =
+    deps.cancelRaf ?? (typeof cancelAnimationFrame === 'function' ? cancelAnimationFrame : clearTimeout)
+  const cancelPending = () => {
+    if (raf == null) return
+    if (raf.kind === 'timer') clearTimeout(raf.id as ReturnType<typeof setTimeout>)
+    else cancelRafImpl(raf.id as number)
+    raf = null
+  }
   const wait = deps.wait ?? defaultWait
   const random = deps.random ?? Math.random
+  const now = deps.now ?? Date.now
+  const isHidden = deps.isHidden ?? documentHidden
   const flush = () => {
     raf = null
     if (queued.length === 0) return
@@ -88,11 +112,19 @@ function openSubscription(deps: EventLogReaderDeps, sessionId: string, options: 
     fromCache = false
     for (const listener of batchListeners) listener(batch)
   }
+  const flushNow = () => {
+    cancelPending()
+    flush()
+  }
   const deliver = (events: readonly LogEvent[], cached = false) => {
     if (events.length === 0) return
     if (cached) fromCache = true
     queued.push(...events)
-    if (raf == null) raf = rafImpl(flush)
+    if (raf != null) return
+    // Publish the handle before scheduling so a synchronous scheduler that flushes inline cannot leave it stuck.
+    const handle: { kind: 'raf' | 'timer'; id: unknown } = { kind: isHidden() ? 'timer' : 'raf', id: null }
+    raf = handle
+    handle.id = handle.kind === 'timer' ? setTimeout(flush, 0) : rafImpl(flush)
   }
   const setStatus = (patch: Partial<SyncStatus>) => {
     status = {
@@ -106,9 +138,98 @@ function openSubscription(deps: EventLogReaderDeps, sessionId: string, options: 
     for (const listener of statusListeners) listener(status)
   }
 
+  // Reconnect state lives here so a page resume can reset it.
+  let followFailures = 0
+  let degraded = false
+  let attempt = 0
+  let running = true
+  /** Abort controller of the backoff/poll sleep in progress, if any. */
+  let wakeCtl: AbortController | null = null
+  /** A resume arrived between steps; skip the next sleep. */
+  let wakePending = false
+  /** Current follow generation and its local liveness probe. */
+  let generation: AbortController | null = null
+  let genAlive: (() => boolean) | null = null
+  /** Set when a resume aborted the generation on purpose; not counted as a follow failure. */
+  let resyncRequested = false
+  let lastFrameAt = now()
+  let lastForcedAt = Number.NEGATIVE_INFINITY
+
+  const sleep = async (ms: number) => {
+    if (control.signal.aborted) return
+    if (wakePending) {
+      wakePending = false
+      return
+    }
+    const ctl = new AbortController()
+    wakeCtl = ctl
+    const stop = () => ctl.abort()
+    control.signal.addEventListener('abort', stop, { once: true })
+    try {
+      await wait(ms, ctl.signal)
+    } catch {
+      /* woken or closed */
+    } finally {
+      control.signal.removeEventListener('abort', stop)
+      if (wakeCtl === ctl) wakeCtl = null
+    }
+  }
+  const takeResync = () => {
+    const requested = resyncRequested
+    resyncRequested = false
+    return requested
+  }
+
+  /**
+   * Page came back (visible, bfcache, online, focus) or the liveness check failed.
+   * Always: deliver anything queued while hidden, reset backoff, and wake a pending sleep.
+   * Forced resync: abort the live follow generation so the loop reopens follow, gets a new
+   * cursor F, fills (appliedSeq, F-1] and goes live again. The Sequencer drops seq <= appliedSeq.
+   */
+  const resume = (info: ResumeInfo) => {
+    if (!running || control.signal.aborted) return
+    flushNow()
+    const t = now()
+    const alive = genAlive ? genAlive() : true
+    const silent = t - lastFrameAt >= RESUME_SILENT_MS
+    const force =
+      !alive ||
+      info.reason === 'online' ||
+      info.persisted === true ||
+      info.hiddenMs >= RESUME_RESYNC_HIDDEN_MS ||
+      (info.reason !== 'focus' && silent)
+    attempt = 0
+    followFailures = 0
+    degraded = false
+    if (wakeCtl) {
+      wakeCtl.abort()
+      return
+    }
+    if (!generation) {
+      wakePending = true
+      return
+    }
+    if (!force) return
+    if (t - lastForcedAt < RESUME_DEBOUNCE_MS) return
+    lastForcedAt = t
+    if (!generation.signal.aborted) {
+      resyncRequested = true
+      generation.abort()
+    }
+  }
+
   void run()
 
   async function run() {
+    try {
+      await runLoop()
+    } finally {
+      running = false
+      stopLiveness()
+    }
+  }
+
+  async function runLoop() {
     const cursor = await deps.checkpoint.getCursor(sessionId)
     let applied = cursor?.appliedSeq ?? -1
     const cachedEvents = await deps.checkpoint.readEvents(sessionId, -1)
@@ -120,14 +241,14 @@ function openSubscription(deps: EventLogReaderDeps, sessionId: string, options: 
     setStatus({ phase: 'connecting', appliedSeq: sequencer.appliedSeq, headSeq: sequencer.headSeq })
 
     let enhance = options.enhancement === 'off' ? false : await detectEnhance()
-    let followFailures = 0
-    let degraded = false
-    let attempt = 0
 
-    const sinkBase = (gapTarget?: { firstSeq: number }): TransportSinkForAll => {
+    const sinkBase = (): TransportSinkForAll => {
       return {
         events(batch) {
           const result = sequencer.push(batch)
+          // Live follow events move past the cursor taken at open; keep head >= applied so lag stays >= 0.
+          if (sequencer.headSeq != null && sequencer.appliedSeq > sequencer.headSeq)
+            sequencer.setHead(sequencer.appliedSeq)
           if (result.delivered.length) {
             deliver(result.delivered)
             void deps.checkpoint.putEvents(sessionId, result.delivered)
@@ -162,11 +283,11 @@ function openSubscription(deps: EventLogReaderDeps, sessionId: string, options: 
       const useRange = enhance && deps.range != null && !useCdc
       if (useRange && deps.range) {
         const outcome = await deps.range.fetch({ sessionId, afterSeq, throughSeq }, sink, signal)
-        if (outcome.ok) return outcome
+        if (outcome.ok || signal.aborted) return outcome
         enhance = false
       } else if (useCdc && deps.cdc) {
         const outcome = await deps.cdc.fetch({ sessionId, afterSeq, throughSeq }, sink, signal)
-        if (outcome.ok) return outcome
+        if (outcome.ok || signal.aborted) return outcome
         enhance = false
       }
       return deps.page.fetch({ sessionId, afterSeq: sequencer.appliedSeq, throughSeq }, sink, signal)
@@ -197,48 +318,81 @@ function openSubscription(deps: EventLogReaderDeps, sessionId: string, options: 
         }
         attempt += 1
         const delay = reconnectDelay(attempt, random)
-        await wait(Math.min(delay, POLL_MS), control.signal).catch(() => {})
+        await sleep(Math.min(delay, POLL_MS))
         degraded = followFailures >= WS_DEGRADE_AFTER
         // keep trying follow as well
       }
+      if (control.signal.aborted) break
 
       setStatus({
         phase: status.phase === 'restoring' ? 'connecting' : status.phase === 'live' ? 'syncing' : 'connecting',
       })
-      const generation = new AbortController()
-      const stopGen = () => generation.abort()
+      const gen = new AbortController()
+      generation = gen
+      genAlive = null
+      const stopGen = () => gen.abort()
       control.signal.addEventListener('abort', stopGen)
-      let opened: { firstSeq: number; cursor: number; hasMore: boolean } | null = null
+      const endGen = () => {
+        control.signal.removeEventListener('abort', stopGen)
+        gen.abort()
+        if (generation === gen) {
+          generation = null
+          genAlive = null
+        }
+      }
+      let opened: FollowOpenedInfo | null = null
+      const base = sinkBase()
+      const touch = () => {
+        if (generation === gen) lastFrameAt = now()
+      }
       const sink = {
-        ...sinkBase(),
-        opened(info: { firstSeq: number; cursor: number; hasMore: boolean }) {
+        events(batch: readonly LogEvent[], meta?: { throughSeq?: number }) {
+          touch()
+          base.events(batch, meta)
+        },
+        head(seq: number) {
+          touch()
+          base.head(seq)
+        },
+        progress: base.progress,
+        ephemeral(frame: unknown) {
+          touch()
+          base.ephemeral(frame)
+        },
+        opened(info: FollowOpenedInfo) {
+          touch()
           opened = info
+          if (generation === gen) genAlive = info.alive ?? null
           sequencer.setHead(info.cursor)
           setStatus({ headSeq: info.cursor, appliedSeq: sequencer.appliedSeq, phase: 'syncing' })
         },
       }
-      const followDone = deps.follow.open({ sessionId }, sink, generation.signal)
-      const openedOrDone = opened
-        ? { kind: 'opened' as const }
-        : await Promise.race([
-            followDone.then(outcome => ({ kind: 'done' as const, outcome })),
-            waitFor(() => opened != null, generation.signal, wait).then(() => ({ kind: 'opened' as const })),
-          ])
-      if (openedOrDone.kind === 'done') {
-        control.signal.removeEventListener('abort', stopGen)
-        generation.abort()
+      const followDone = deps.follow.open({ sessionId }, sink, gen.signal)
+      const first = await Promise.race([
+        followDone.then(outcome => ({ kind: 'done' as const, outcome })),
+        waitFor(() => opened != null, gen.signal, wait).then(() => ({ kind: 'opened' as const })),
+      ])
+      const info = opened as FollowOpenedInfo | null
+      if (first.kind === 'done' || info == null || gen.signal.aborted) {
+        endGen()
         if (control.signal.aborted) break
+        if (takeResync()) continue
         followFailures += 1
         if (followFailures >= WS_DEGRADE_AFTER) degraded = true
         attempt += 1
-        await wait(reconnectDelay(attempt, random), control.signal).catch(() => {})
+        await sleep(reconnectDelay(attempt, random))
         continue
       }
       followFailures = 0
       attempt = 0
-      const info = opened!
       const gapThrough = info.firstSeq - 1
-      const gap = await fillGap(sequencer.appliedSeq, gapThrough, generation.signal)
+      const gap = await fillGap(sequencer.appliedSeq, gapThrough, gen.signal)
+      if (gen.signal.aborted) {
+        endGen()
+        if (control.signal.aborted) break
+        takeResync()
+        continue
+      }
       if (!gap.ok && !gap.retryable) {
         setStatus({
           phase: 'error',
@@ -247,9 +401,21 @@ function openSubscription(deps: EventLogReaderDeps, sessionId: string, options: 
           headSeq: sequencer.headSeq,
         })
         finishReady({ ok: false, code: gap.code, message: gap.message ?? gap.code })
-        control.signal.removeEventListener('abort', stopGen)
-        generation.abort()
+        endGen()
         break
+      }
+      if (!gap.ok) {
+        // A retryable gap failure must not go live with a hole; reopen follow after a backoff.
+        endGen()
+        setStatus({
+          phase: 'stalled',
+          error: { code: gap.code, message: gap.message ?? gap.code, retrying: true },
+          appliedSeq: sequencer.appliedSeq,
+          headSeq: sequencer.headSeq,
+        })
+        attempt += 1
+        await sleep(reconnectDelay(attempt, random))
+        continue
       }
       setStatus({
         phase: 'live',
@@ -260,9 +426,9 @@ function openSubscription(deps: EventLogReaderDeps, sessionId: string, options: 
       })
       if (sequencer.appliedSeq >= gapThrough) finishReady({ ok: true, caughtUpTo: sequencer.appliedSeq })
       const outcome = await followDone
-      control.signal.removeEventListener('abort', stopGen)
-      generation.abort()
+      endGen()
       if (control.signal.aborted) break
+      if (takeResync()) continue
       if (!outcome.ok) {
         followFailures += 1
         if (followFailures >= WS_DEGRADE_AFTER) degraded = true
@@ -271,11 +437,11 @@ function openSubscription(deps: EventLogReaderDeps, sessionId: string, options: 
           error: { code: outcome.code, message: outcome.message ?? outcome.code, retrying: true },
         })
         attempt += 1
-        await wait(reconnectDelay(attempt, random), control.signal).catch(() => {})
+        await sleep(reconnectDelay(attempt, random))
       }
     }
     if (status.phase !== 'error') setStatus({ phase: 'closed' })
-    if (raf != null) cancelRaf(raf as number)
+    cancelPending()
   }
 
   async function detectEnhance() {
@@ -285,12 +451,21 @@ function openSubscription(deps: EventLogReaderDeps, sessionId: string, options: 
     return probeEnhancement()
   }
 
-  const unsee = deps.onVisibility
-    ? deps.onVisibility(() => {
-        /* a visibility resume is handled by the reconnect loop via aborted waits in a later iteration;
-           callers can close/reopen. */
-      })
-    : () => {}
+  const unsubscribeResume = (deps.onResume ?? browserResumeSource)(resume)
+  const livenessMs = deps.livenessMs === undefined ? LIVENESS_CHECK_MS : deps.livenessMs
+  let livenessTimer: ReturnType<typeof setInterval> | null = null
+  if (livenessMs !== false && livenessMs > 0) {
+    livenessTimer = setInterval(() => {
+      if (isHidden() || !generation || !genAlive) return
+      if (!genAlive()) resume({ reason: 'liveness', hiddenMs: 0 })
+    }, livenessMs)
+    const timer = livenessTimer as { unref?: () => void }
+    timer.unref?.()
+  }
+  function stopLiveness() {
+    if (livenessTimer != null) clearInterval(livenessTimer)
+    livenessTimer = null
+  }
 
   return {
     onBatch(listener) {
@@ -311,9 +486,10 @@ function openSubscription(deps: EventLogReaderDeps, sessionId: string, options: 
     },
     ready,
     close() {
-      unsee()
+      unsubscribeResume()
+      stopLiveness()
       control.abort()
-      if (raf != null) cancelRaf(raf as number)
+      cancelPending()
       setStatus({ phase: 'closed' })
     },
   }
@@ -324,7 +500,7 @@ type TransportSinkForAll = {
   head: TransportSink['head']
   progress: TransportSink['progress']
   ephemeral: TransportSink['ephemeral']
-  opened(info: { firstSeq: number; cursor: number; hasMore: boolean }): void
+  opened(info: FollowOpenedInfo): void
 }
 
 function continuousPrefix(events: readonly LogEvent[], afterSeq: number) {

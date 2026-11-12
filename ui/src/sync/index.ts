@@ -1,4 +1,6 @@
 export { createEventLogReader } from './reader.ts'
+export { browserResumeSource } from './resume.ts'
+export type { ResumeInfo, ResumeReason, ResumeSource } from './resume.ts'
 export { createWsFollowTransport } from './ws-follow.ts'
 export { createOfficialPageTransport } from './official-page.ts'
 export { createCdcSnapshotTransport } from './cdc.ts'

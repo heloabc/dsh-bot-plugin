@@ -1,5 +1,5 @@
 import { OPENING_MESSAGES } from './constants.ts'
-import type { LiveTransport, TransportSink } from './transport.ts'
+import type { FollowOpenedInfo, LiveTransport, TransportSink } from './transport.ts'
 import { sessionAddress, type LogEvent, type SessionAddress } from './types.ts'
 
 export type AddressOf = (sessionId: string) => SessionAddress
@@ -22,6 +22,8 @@ export function createWsFollowTransport(options: {
         const socket = (options.websocket ?? (target => new WebSocket(target)))(url)
         const streamId = `follow-${Math.random().toString(36).slice(2)}`
         let settled = false
+        // readyState 1 is OPEN; a socket the browser already knows is closing or closed is not live.
+        const alive = () => !settled && socket.readyState === 1
         const finish = (
           outcome: { ok: true; throughSeq: number } | { ok: false; retryable: boolean; code: string; message?: string },
         ) => {
@@ -74,7 +76,7 @@ export function createWsFollowTransport(options: {
             return
           }
           if (frame.type !== 'item') return
-          handleItem(frame.value, sink)
+          handleItem(frame.value, sink, alive)
         })
         socket.addEventListener('close', () => finish({ ok: false, retryable: true, code: 'FOLLOW_CLOSED' }))
         socket.addEventListener('error', () => finish({ ok: false, retryable: true, code: 'FOLLOW_ERROR' }))
@@ -85,7 +87,8 @@ export function createWsFollowTransport(options: {
 
 function handleItem(
   value: unknown,
-  sink: TransportSink & { opened(info: { firstSeq: number; cursor: number; hasMore: boolean }): void },
+  sink: TransportSink & { opened(info: FollowOpenedInfo): void },
+  alive?: () => boolean,
 ) {
   const payload = payloadOf(value)
   if (!payload) return
@@ -94,7 +97,7 @@ function handleItem(
     const records = collectEvents(payload.records)
     const firstSeq = records.length > 0 ? Math.min(...records.map(event => event.seq)) : cursor + 1
     const hasMore = payload.hasMore === true
-    sink.opened({ firstSeq, cursor, hasMore })
+    sink.opened({ firstSeq, cursor, hasMore, ...(alive ? { alive } : {}) })
     sink.head(cursor)
     if (records.length) sink.events(records)
     sink.ephemeral(payload)

@@ -32,8 +32,16 @@ export interface LiveTransport {
   open(
     req: { sessionId: string },
     sink: TransportSink & {
-      opened(info: { firstSeq: number; cursor: number; hasMore: boolean }): void
+      opened(info: FollowOpenedInfo): void
     },
     signal: AbortSignal,
   ): Promise<TransportOutcome>
+}
+
+export interface FollowOpenedInfo {
+  firstSeq: number
+  cursor: number
+  hasMore: boolean
+  /** Cheap local liveness probe for the live channel (e.g. WebSocket readyState is OPEN). */
+  alive?: () => boolean
 }

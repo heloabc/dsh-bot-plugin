@@ -17,3 +17,11 @@ export const ENHANCE_RANGE_PATH = '/api/dsh-bot/log/range'
 export const ENHANCE_MANIFEST_PATH = '/api/dsh-bot/log/manifest'
 export const ENHANCE_CHUNK_PATH = '/api/dsh-bot/log/chunk'
 export const SESSION_EVENTS_PATH = '/api/session/events'
+/** Hidden at least this long before a resume forces a follow reopen and gap fill. */
+export const RESUME_RESYNC_HIDDEN_MS = 3000
+/** No follow frame for this long and a resume forces a reopen even if the tab was not hidden. */
+export const RESUME_SILENT_MS = 30_000
+/** Forced resyncs closer together than this are coalesced (visibilitychange + focus + pageshow). */
+export const RESUME_DEBOUNCE_MS = 1000
+/** While visible, how often the reader checks that the follow socket is still OPEN. */
+export const LIVENESS_CHECK_MS = 15_000
