@@ -8,19 +8,30 @@ export const LOG_RANGE_PATH = `${LOG_ROUTE_PREFIX}/range`
 
 type FetchHandler = (request: Request) => Promise<Response>
 
+type ConnectionService = {
+  fetch?: {
+    register?: (route: {
+      path: string
+      methods: readonly string[]
+      requestBody: string
+      fetch: FetchHandler
+    }) => unknown
+  }
+  requestRejection?(req: import('node:http').IncomingMessage): number | undefined
+}
+
+/**
+ * Optional `connection` must be read with `ctx.get`, never `ctx.connection`.
+ * Cordis throws `cannot get property "connection" without inject` on the
+ * property access when the HTTP plugin did not declare that service.
+ */
+export function probeConnection(ctx: HostContext): ConnectionService | undefined {
+  if (typeof ctx.get !== 'function') return undefined
+  return ctx.get('connection') as ConnectionService | undefined
+}
+
 export function registerLogRoutes(ctx: HostContext, service: LogSnapshotService) {
-  const connection = (ctx.get?.('connection') ?? ctx.connection) as
-    | {
-        fetch?: {
-          register?: (route: {
-            path: string
-            methods: readonly string[]
-            requestBody: string
-            fetch: FetchHandler
-          }) => unknown
-        }
-      }
-    | undefined
+  const connection = probeConnection(ctx)
   if (connection?.fetch?.register === undefined) return false
   const handlers = logFetchHandlers(service)
   for (const [path, handler] of handlers) {

@@ -8,7 +8,7 @@ import { provisionSession } from './provision.ts'
 import { handleWorkApi, openPageLive, openWorkLive } from './work-http.ts'
 import { createLogSource } from './log/source.ts'
 import { createLogSnapshotService } from './log/snapshot-service.ts'
-import { dispatchLogRequest, registerLogRoutes } from './log/routes.ts'
+import { dispatchLogRequest, probeConnection, registerLogRoutes } from './log/routes.ts'
 
 /**
  * Local management routes. Model tools cannot confirm a persona or change revocation.
@@ -358,7 +358,7 @@ export function memoryView(engine: import('./engine.ts').Engine, sessionId: stri
  * @param {import('node:http').IncomingMessage} req
  */
 function reject(ctx: HostContext, req: import('node:http').IncomingMessage) {
-  const connection = ctx.get?.('connection') ?? ctx.connection
+  const connection = probeConnection(ctx)
   const rejection = connection?.requestRejection?.(req)
   if (rejection !== undefined) return rejection
   const remote = req.socket?.remoteAddress ?? ''

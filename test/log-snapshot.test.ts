@@ -130,17 +130,20 @@ test('registerLogRoutes is a no-op when connection.fetch.register is missing', a
   const service = createLogSnapshotService(memorySource({}))
   assert.equal(registerLogRoutes({} as any, service), false)
   let registered = 0
+  const handle = {
+    fetch: {
+      register() {
+        registered += 1
+        return () => {}
+      },
+    },
+  }
   const ctx = {
     effect(run: () => void) {
       run()
     },
-    connection: {
-      fetch: {
-        register() {
-          registered += 1
-          return () => {}
-        },
-      },
+    get(name: string) {
+      return name === 'connection' ? handle : undefined
     },
   }
   assert.equal(registerLogRoutes(ctx as any, service), true)
