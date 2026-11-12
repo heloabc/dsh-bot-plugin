@@ -5,7 +5,8 @@ import { createEngine } from './engine.ts'
 import { renderPeers, renderSession, renderTickets } from './context.ts'
 import { toolDefinitions } from './tools.ts'
 import { createTriggers } from './triggers.ts'
-import { followupDurable, liveAgent, logHasMessage, removePending, sessionEvents } from './inbox.ts'
+import { followupDurable, liveAgent, logHasMessage, removePending } from './inbox.ts'
+import { createLogSource } from './log/source.ts'
 import { toolError } from './errors.ts'
 import { publishRuntime, publishWorkRuntime, runtimeFor } from './runtime-registry.ts'
 import { type HostContext, type PluginHost } from './host.ts'
@@ -27,7 +28,15 @@ type FoundationsConfig = {
   budgetNotice?: boolean
 }
 // Cordis throws if a plugin reads a service it did not inject. Crash recovery reads the session log through this one.
-export const inject = ['systemPrompt', 'tools', 'sessions', 'agents', 'agentPresets', 'sessionPersistence']
+export const inject = [
+  'systemPrompt',
+  'tools',
+  'sessions',
+  'agents',
+  'agentPresets',
+  'sessionPersistence',
+  'sessionQuery',
+]
 
 /**
  * @param {import('./host.ts').PluginHost} ctx
@@ -396,7 +405,7 @@ function startWork(
     },
     snapshot: async sessionId => {
       try {
-        return await sessionEvents(ctx, sessionId)
+        return (await createLogSource(ctx).read(sessionId, -1)).events
       } catch {
         return []
       }
@@ -551,8 +560,8 @@ function triggerTool(
  * @param {string} messageId
  */
 async function logHasDurable(ctx: HostContext, sessionId: string, messageId: string) {
-  const events = await sessionEvents(ctx, sessionId)
-  return logHasMessage({ snapshotEvents: () => events }, messageId)
+  const { events } = await createLogSource(ctx).read(sessionId, -1)
+  return logHasMessage(events, messageId)
 }
 
 /**
