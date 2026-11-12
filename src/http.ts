@@ -8,6 +8,9 @@ import { sessionEvents } from './inbox.ts'
 import { createSessionSnapshots, eventsBefore, eventsWindow, followTailStart } from './live-snapshot.ts'
 import { provisionSession } from './provision.ts'
 import { handleWorkApi, openPageLive, openWorkLive } from './work-http.ts'
+import { createLogSource } from './log/source.ts'
+import { createLogSnapshotService } from './log/snapshot-service.ts'
+import { dispatchLogRequest, registerLogRoutes } from './log/routes.ts'
 
 /**
  * Local management routes. Model tools cannot confirm a persona or change revocation.
@@ -27,6 +30,8 @@ export function registerHttp(
   const storeDir = dataDir || (ctx.profileContext?.dir ? join(ctx.profileContext.dir, 'session-foundations') : '')
   const profileDir = ctx.profileContext?.dir || (storeDir !== '' ? dirname(storeDir) : '')
   const sessionSnapshots = createSessionSnapshots()
+  const logService = createLogSnapshotService(createLogSource(ctx))
+  const logOnConnection = registerLogRoutes(ctx, logService)
   const desk =
     profileDir === ''
       ? null
@@ -69,6 +74,10 @@ export function registerHttp(
     if (rejection) return send(res, rejection, { ok: false, code: 'FORBIDDEN' })
     const url = new URL(req.url ?? '/', 'http://127.0.0.1')
     const rawPath = url.pathname.replace(/\/+$/, '') || '/'
+    if (!logOnConnection && rawPath.startsWith('/api/dsh-bot/log')) {
+      const response = await dispatchLogRequest(logService, await asFetchRequest(req))
+      if (response) return sendFetchResponse(res, response)
+    }
     if (rawPath === '/dsh-bot' || (rawPath.startsWith('/dsh-bot/') && !rawPath.startsWith('/dsh-bot/api'))) {
       if (serveDesk(req, res, rawPath)) return
       return send(res, 404, { ok: false, code: 'NOT_FOUND' })
@@ -328,9 +337,17 @@ export function registerHttp(
       path: '/dsh-bot',
       handler,
     })
+    const disposeLog = logOnConnection
+      ? null
+      : webServer.register({
+          kind: 'prefix',
+          path: '/api/dsh-bot',
+          handler,
+        })
     return () => {
       if (typeof disposeFoundations === 'function') disposeFoundations()
       if (typeof disposeDesk === 'function') disposeDesk()
+      if (typeof disposeLog === 'function') disposeLog()
     }
   })
 }
@@ -625,4 +642,27 @@ function serveDesk(
   if (req.method === 'HEAD') res.end()
   else createReadStream(file).pipe(res)
   return true
+}
+
+async function asFetchRequest(req: import('node:http').IncomingMessage) {
+  const host = req.headers.host ?? '127.0.0.1'
+  const url = `http://${host}${req.url ?? '/'}`
+  const headers = new Headers()
+  for (const [name, value] of Object.entries(req.headers)) {
+    if (typeof value === 'string') headers.set(name, value)
+    else if (Array.isArray(value)) {
+      for (const item of value) headers.append(name, item)
+    }
+  }
+  return new Request(url, { method: req.method ?? 'GET', headers })
+}
+
+async function sendFetchResponse(res: import('node:http').ServerResponse, response: Response) {
+  const headers: Record<string, string> = {}
+  response.headers.forEach((value, name) => {
+    headers[name] = value
+  })
+  const body = response.body ? Buffer.from(await response.arrayBuffer()) : Buffer.alloc(0)
+  res.writeHead(response.status, headers)
+  res.end(body)
 }

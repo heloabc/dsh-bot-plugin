@@ -7,7 +7,7 @@ import type { HostContext } from './host.ts'
 import { runtimeFor, workRuntimeFor } from './runtime-registry.ts'
 
 export const name = 'session-foundations-http'
-export const inject = ['webServer', 'agents', 'sessionPersistence']
+export const inject = ['webServer', 'agents', 'sessionPersistence', 'sessionQuery']
 
 /**
  * Local management routes for the same SQLite the main plugin uses.

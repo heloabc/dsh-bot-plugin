@@ -1,4 +1,5 @@
 import { planChunks } from './cdc.ts'
+import { stableStringify } from './log/canonical.ts'
 
 /**
  * Session history is one canonical JSON array of the host event log.
@@ -12,17 +13,7 @@ const PLAN_LIMIT = 8
  * Sorted-key JSON, so the same log cuts into the same chunks.
  * Array order is the host order.
  */
-export function stableStringify(value: unknown): string {
-  if (value === undefined) return 'null'
-  if (value instanceof Date) return JSON.stringify(value)
-  if (value === null || typeof value !== 'object') return JSON.stringify(value) ?? 'null'
-  if (Array.isArray(value)) return `[${value.map(item => stableStringify(item)).join(',')}]`
-  const record = value as Record<string, unknown>
-  const keys = Object.keys(record)
-    .filter(key => record[key] !== undefined)
-    .sort()
-  return `{${keys.map(key => `${JSON.stringify(key)}:${stableStringify(record[key])}`).join(',')}}`
-}
+export { stableStringify } from './log/canonical.ts'
 
 export function canonicalBytes(value: unknown): Buffer {
   return Buffer.from(stableStringify(value), 'utf8')
