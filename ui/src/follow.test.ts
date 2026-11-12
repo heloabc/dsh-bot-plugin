@@ -257,17 +257,10 @@ test('a timed-out turn keeps the retry chain and the terminal failure', () => {
   assert.equal(state.drafting, false)
 })
 
-test('a later history prefix cannot reopen a turn the follow page already finished', () => {
+test('ordered events keep a finished turn closed after later turns complete', () => {
+  // The Sequencer delivers strictly increasing seqs, so the reducer no longer
+  // has to defend against a late CDC prefix reopening a turn.
   const state = reduce([
-    item({
-      type: 'event',
-      event: { type: 'turn/end', seq: 272, time: 2_000, data: { turn: 18, reason: { kind: 'completed' } } },
-    }),
-    item({ type: 'event', event: { type: 'turn/start', seq: 274, time: 3_000, data: { turn: 19 } } }),
-    item({
-      type: 'event',
-      event: { type: 'turn/end', seq: 287, time: 4_000, data: { turn: 19, reason: { kind: 'completed' } } },
-    }),
     item({ type: 'event', event: { type: 'turn/start', seq: 259, time: 1_000, data: { turn: 18 } } }),
     item({
       type: 'event',
@@ -285,6 +278,15 @@ test('a later history prefix cannot reopen a turn the follow page already finish
           message: { toolCallId: 'c1', content: [{ type: 'text', text: 'ok' }] },
         },
       },
+    }),
+    item({
+      type: 'event',
+      event: { type: 'turn/end', seq: 272, time: 2_000, data: { turn: 18, reason: { kind: 'completed' } } },
+    }),
+    item({ type: 'event', event: { type: 'turn/start', seq: 274, time: 3_000, data: { turn: 19 } } }),
+    item({
+      type: 'event',
+      event: { type: 'turn/end', seq: 287, time: 4_000, data: { turn: 19, reason: { kind: 'completed' } } },
     }),
   ])
   assert.equal(state.drafting, false)

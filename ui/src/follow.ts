@@ -1047,158 +1047,167 @@ function applySnapshot(state: ThreadState, value: Record<string, unknown>): Thre
   return next
 }
 
-function reduceFrame(state: ThreadState, frame: unknown, seen: Set<number>): ThreadState {
+export function applyLogEvent(state: ThreadState, event: SessionEvent): ThreadState {
+  if (typeof event.type !== 'string') return state
   let next = state
-  const payload = payloadOf(frame)
-  if (payload?.type === 'snapshot') next = applySnapshot(next, payload)
-  const found: SessionEvent[] = []
-  collectEvents(frame, found)
-  for (const event of found) {
-    if (typeof event.type !== 'string') continue
-    if (event.seq != null) {
-      if (seen.has(event.seq)) continue
-      seen.add(event.seq)
-    }
-    const data = event.data ?? {}
-    if (event.type === 'session/title' && typeof data.title === 'string') {
-      const kind = data.source && typeof data.source === 'object' ? (data.source as { kind?: string }).kind : ''
-      if (!(next.title && kind !== 'provider')) next = { ...next, title: data.title }
-      continue
-    }
-    if (event.type === 'request/context') {
-      const model = typeof data.model === 'string' ? data.model : ''
-      if (model) next = { ...next, model }
-      continue
-    }
-    if (event.type === 'turn/start') {
-      const turn = numberOf(data.turn)
-      // The follow page can arrive before the CDC prefix. A start for a turn that already ended must not reopen it.
-      if (turn != null && next.turnEnds?.[turn]) continue
-      if (turn != null && next.turn != null && turn < next.turn) continue
-      next = {
-        ...next,
-        drafting: true,
-        turn: turn ?? next.turn,
-        turnStartedAt: typeof event.time === 'number' ? event.time : Date.now(),
-      }
-      continue
-    }
-    if (event.type === 'turn/end') {
-      const turn = numberOf(data.turn) ?? next.turn
-      const completed = { ...next.completed }
-      if (turn != null && next.turn === turn && next.turnStartedAt != null && typeof event.time === 'number') {
-        completed[turn] = Math.max(1, Math.round((event.time - next.turnStartedAt) / 1000))
-      }
-      const failure = turn == null ? null : failureOf(data.reason)
-      const failures = failure == null || turn == null ? next.failures : { ...next.failures, [turn]: failure }
-      const endKind =
-        data.reason && typeof data.reason === 'object' && typeof (data.reason as { kind?: unknown }).kind === 'string'
-          ? (data.reason as { kind: string }).kind
-          : ''
-      const turnEnds =
-        turn == null
-          ? (next.turnEnds ?? {})
-          : { ...(next.turnEnds ?? {}), [turn]: endKind || next.turnEnds?.[turn] || 'ended' }
-      next = settleTurn(next, turn)
-      next = {
-        ...next,
-        drafting: next.turn === turn ? false : next.drafting,
-        completed,
-        failures,
-        turnEnds,
-        turnStartedAt: next.turn === turn ? null : next.turnStartedAt,
-      }
-      continue
-    }
-    if (event.type === 'llm/retry') {
-      const turn = numberOf(data.turn)
-      const retryId = typeof data.retryId === 'string' ? data.retryId : ''
-      const retry = numberOf(data.retry)
-      if (turn == null || retryId === '' || retry == null) continue
-      const failure =
-        data.failure && typeof data.failure === 'object' ? (data.failure as { message?: string; code?: string }) : {}
-      const attempt: RetryAttempt = {
-        retryId,
-        retry,
-        maxRetries: numberOf(data.maxRetries) ?? null,
-        delayMs: typeof data.delayMs === 'number' ? data.delayMs : 0,
-        message: typeof failure.message === 'string' ? failure.message : 'Request failed.',
-        ...(typeof failure.code === 'string' ? { code: failure.code } : {}),
-        state: 'scheduled',
-      }
-      const prior = next.retries[turn] ?? []
-      next = {
-        ...next,
-        retries: {
-          ...next.retries,
-          [turn]: [...prior.filter(item => item.retryId !== retryId || item.retry !== retry), attempt],
-        },
-      }
-      continue
-    }
-    if (event.type === 'llm/retry-started') {
-      const turn = numberOf(data.turn)
-      const retryId = typeof data.retryId === 'string' ? data.retryId : ''
-      const retry = numberOf(data.retry)
-      if (turn == null || retryId === '' || retry == null) continue
-      const prior = next.retries[turn]
-      if (!prior) continue
-      next = {
-        ...next,
-        retries: {
-          ...next.retries,
-          [turn]: prior.map(item =>
-            item.retryId === retryId && item.retry === retry ? { ...item, state: 'started' } : item,
-          ),
-        },
-      }
-      continue
-    }
-    if (event.type === 'assistant/live-chunk') {
-      next = applyLive(next, event)
-      continue
-    }
-    if (event.type === 'user/message') {
-      const message = messageBody(data)
-      if (!message || message.source?.kind !== 'user') continue
-      const text = textOf(message.content)
-      if (!text) continue
-      next = {
-        ...next,
-        segments: addUser(next.segments, {
-          kind: 'user',
-          id: `user:${event.seq ?? text}`,
-          text,
-          time: event.time,
-          seq: event.seq ?? Number.MAX_SAFE_INTEGER,
-          turn: numberOf(data.turn),
-        }),
-      }
-      continue
-    }
-    if (event.type === 'assistant/message') {
-      if (holdsMessage(next, event)) next = { ...next, pendingAssistant: event }
-      else next = applyAssistant(next, event)
-      continue
-    }
-    if (event.type === 'tool/call') {
-      next = applyToolCall(next, event)
-      continue
-    }
-    if (event.type === 'tool/result') {
-      next = applyToolResult(next, event)
-    }
+  const data = event.data ?? {}
+  if (event.type === 'session/title' && typeof data.title === 'string') {
+    const kind = data.source && typeof data.source === 'object' ? (data.source as { kind?: string }).kind : ''
+    if (!(next.title && kind !== 'provider')) next = { ...next, title: data.title }
+    return next
   }
-  if (payload?.type === 'snapshot') {
+  if (event.type === 'request/context') {
+    const model = typeof data.model === 'string' ? data.model : ''
+    if (model) next = { ...next, model }
+    return next
+  }
+  if (event.type === 'turn/start') {
+    const turn = numberOf(data.turn)
+    next = {
+      ...next,
+      drafting: true,
+      turn: turn ?? next.turn,
+      turnStartedAt: typeof event.time === 'number' ? event.time : Date.now(),
+    }
+    return next
+  }
+  if (event.type === 'turn/end') {
+    const turn = numberOf(data.turn) ?? next.turn
+    const completed = { ...next.completed }
+    if (turn != null && next.turn === turn && next.turnStartedAt != null && typeof event.time === 'number') {
+      completed[turn] = Math.max(1, Math.round((event.time - next.turnStartedAt) / 1000))
+    }
+    const failure = turn == null ? null : failureOf(data.reason)
+    const failures = failure == null || turn == null ? next.failures : { ...next.failures, [turn]: failure }
+    const endKind =
+      data.reason && typeof data.reason === 'object' && typeof (data.reason as { kind?: unknown }).kind === 'string'
+        ? (data.reason as { kind: string }).kind
+        : ''
+    const turnEnds =
+      turn == null
+        ? (next.turnEnds ?? {})
+        : { ...(next.turnEnds ?? {}), [turn]: endKind || next.turnEnds?.[turn] || 'ended' }
+    next = settleTurn(next, turn)
+    next = {
+      ...next,
+      drafting: next.turn === turn ? false : next.drafting,
+      completed,
+      failures,
+      turnEnds,
+      turnStartedAt: next.turn === turn ? null : next.turnStartedAt,
+    }
+    return next
+  }
+  if (event.type === 'llm/retry') {
+    const turn = numberOf(data.turn)
+    const retryId = typeof data.retryId === 'string' ? data.retryId : ''
+    const retry = numberOf(data.retry)
+    if (turn == null || retryId === '' || retry == null) return next
+    const failure =
+      data.failure && typeof data.failure === 'object' ? (data.failure as { message?: string; code?: string }) : {}
+    const attempt: RetryAttempt = {
+      retryId,
+      retry,
+      maxRetries: numberOf(data.maxRetries) ?? null,
+      delayMs: typeof data.delayMs === 'number' ? data.delayMs : 0,
+      message: typeof failure.message === 'string' ? failure.message : 'Request failed.',
+      ...(typeof failure.code === 'string' ? { code: failure.code } : {}),
+      state: 'scheduled',
+    }
+    const prior = next.retries[turn] ?? []
+    next = {
+      ...next,
+      retries: {
+        ...next.retries,
+        [turn]: [...prior.filter(item => item.retryId !== retryId || item.retry !== retry), attempt],
+      },
+    }
+    return next
+  }
+  if (event.type === 'llm/retry-started') {
+    const turn = numberOf(data.turn)
+    const retryId = typeof data.retryId === 'string' ? data.retryId : ''
+    const retry = numberOf(data.retry)
+    if (turn == null || retryId === '' || retry == null) return next
+    const prior = next.retries[turn]
+    if (!prior) return next
+    next = {
+      ...next,
+      retries: {
+        ...next.retries,
+        [turn]: prior.map(item =>
+          item.retryId === retryId && item.retry === retry ? { ...item, state: 'started' } : item,
+        ),
+      },
+    }
+    return next
+  }
+  if (event.type === 'assistant/live-chunk') {
+    next = applyLive(next, event)
+    return next
+  }
+  if (event.type === 'user/message') {
+    const message = messageBody(data)
+    if (!message || message.source?.kind !== 'user') return next
+    const text = textOf(message.content)
+    if (!text) return next
+    next = {
+      ...next,
+      segments: addUser(next.segments, {
+        kind: 'user',
+        id: `user:${event.seq ?? text}`,
+        text,
+        time: event.time,
+        seq: event.seq ?? Number.MAX_SAFE_INTEGER,
+        turn: numberOf(data.turn),
+      }),
+    }
+    return next
+  }
+  if (event.type === 'assistant/message') {
+    if (holdsMessage(next, event)) next = { ...next, pendingAssistant: event }
+    else next = applyAssistant(next, event)
+    return next
+  }
+  if (event.type === 'tool/call') {
+    next = applyToolCall(next, event)
+    return next
+  }
+  if (event.type === 'tool/result') {
+    next = applyToolResult(next, event)
+  }
+  return next
+}
+
+export function applyEphemeralFrame(state: ThreadState, frame: unknown): ThreadState {
+  const payload = payloadOf(frame) ?? (frame && typeof frame === 'object' ? (frame as Record<string, unknown>) : null)
+  if (!payload) return state
+  let next = state
+  if (payload.type === 'snapshot') {
+    next = applySnapshot(next, payload)
     const baseline = payload.assistantStream
     if (baseline && typeof baseline === 'object') next = applyStreamBaseline(next, baseline as Record<string, unknown>)
   }
-  if (payload?.type === 'assistant-stream') {
+  if (payload.type === 'assistant-stream') {
     const streamFrame = payload.frame
     if (streamFrame && typeof streamFrame === 'object')
       next = applyStreamFrame(next, streamFrame as Record<string, unknown>)
   }
   return next
+}
+
+function reduceFrame(state: ThreadState, frame: unknown, seen: Set<number>): ThreadState {
+  let next = state
+  const found: SessionEvent[] = []
+  collectEvents(frame, found)
+  for (const event of found) {
+    if (event.seq != null) {
+      if (seen.has(event.seq)) continue
+      seen.add(event.seq)
+    }
+    next = applyLogEvent(next, event)
+  }
+  return applyEphemeralFrame(next, frame)
 }
 
 export function ingestFrame(state: ThreadState, frame: unknown, seen: Set<number>): ThreadState {
