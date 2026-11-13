@@ -4,10 +4,11 @@ import { fileURLToPath } from 'node:url'
 import { createDesk, defaultSessionCwd, type DeskRequest } from './desk.ts'
 import type { HostContext } from './host.ts'
 import { toolError } from './errors.ts'
-import { sessionEvents } from './inbox.ts'
-import { createSessionSnapshots, eventsBefore, eventsWindow, followTailStart } from './live-snapshot.ts'
 import { provisionSession } from './provision.ts'
 import { handleWorkApi, openPageLive, openWorkLive } from './work-http.ts'
+import { createLogSource } from './log/source.ts'
+import { createLogSnapshotService } from './log/snapshot-service.ts'
+import { dispatchLogRequest, probeConnection, registerLogRoutes } from './log/routes.ts'
 
 /**
  * Local management routes. Model tools cannot confirm a persona or change revocation.
@@ -26,7 +27,8 @@ export function registerHttp(
   const webServer = ctx.webServer
   const storeDir = dataDir || (ctx.profileContext?.dir ? join(ctx.profileContext.dir, 'session-foundations') : '')
   const profileDir = ctx.profileContext?.dir || (storeDir !== '' ? dirname(storeDir) : '')
-  const sessionSnapshots = createSessionSnapshots()
+  const logService = createLogSnapshotService(createLogSource(ctx))
+  const logOnConnection = registerLogRoutes(ctx, logService)
   const desk =
     profileDir === ''
       ? null
@@ -69,6 +71,10 @@ export function registerHttp(
     if (rejection) return send(res, rejection, { ok: false, code: 'FORBIDDEN' })
     const url = new URL(req.url ?? '/', 'http://127.0.0.1')
     const rawPath = url.pathname.replace(/\/+$/, '') || '/'
+    if (!logOnConnection && rawPath.startsWith('/api/dsh-bot/log')) {
+      const response = await dispatchLogRequest(logService, await asFetchRequest(req))
+      if (response) return sendFetchResponse(res, response)
+    }
     if (rawPath === '/dsh-bot' || (rawPath.startsWith('/dsh-bot/') && !rawPath.startsWith('/dsh-bot/api'))) {
       if (serveDesk(req, res, rawPath)) return
       return send(res, 404, { ok: false, code: 'NOT_FOUND' })
@@ -225,59 +231,6 @@ export function registerHttp(
         const body = await readJson(req)
         return send(res, 200, runtime.revokeWebhook(body.id))
       }
-      if (
-        req.method === 'GET' &&
-        (path === '/session-foundations/api/snapshot' ||
-          path === '/session-foundations/api/snapshot/chunks' ||
-          path === '/session-foundations/api/snapshot/range')
-      ) {
-        const sessionId = url.searchParams.get('sessionId') ?? ''
-        if (sessionId === '') return send(res, 400, toolError('VALIDATION', 'sessionId is required.'))
-        if (path === '/session-foundations/api/snapshot/chunks') {
-          const hashes = url.searchParams.getAll('hash').filter(hash => hash !== '')
-          const taken = sessionSnapshots.take(sessionId, hashes)
-          if (!taken) return send(res, 409, toolError('STALE', 'Ask for the snapshot manifest again.'))
-          return send(res, 200, taken)
-        }
-        const beforeSeq = readCount(url, 'beforeSeq')
-        const fromSeq = readCount(url, 'fromSeq')
-        const tailMessages = readCount(url, 'tailMessages')
-        if (beforeSeq === false || fromSeq === false || tailMessages === false)
-          return send(res, 400, toolError('VALIDATION', 'Sequence bounds must be non-negative integers.'))
-        /** @type {unknown[]} */
-        let events: unknown[] = []
-        try {
-          events = await sessionEvents(ctx, sessionId)
-        } catch (error) {
-          return send(
-            res,
-            503,
-            toolError('UNAVAILABLE', error instanceof Error ? error.message : 'The session log is not readable.'),
-          )
-        }
-        if (path === '/session-foundations/api/snapshot/range') {
-          if (typeof fromSeq !== 'number') return send(res, 400, toolError('VALIDATION', 'fromSeq is required.'))
-          return send(res, 200, { ok: true, sessionId, events: eventsWindow(events, fromSeq, beforeSeq) })
-        }
-        const tail = typeof tailMessages === 'number' && tailMessages > 0 ? Math.min(tailMessages, 80) : null
-        const cut = typeof beforeSeq === 'number' ? beforeSeq : tail == null ? null : followTailStart(events, tail)
-        const source = cut == null ? events : eventsBefore(events, cut)
-        if (source.length === 0) {
-          return send(res, 200, {
-            ok: true,
-            sessionId,
-            epoch: '',
-            totalSize: 0,
-            hashes: [],
-            count: 0,
-            ...(cut == null ? {} : { beforeSeq: cut }),
-          })
-        }
-        sessionSnapshots.publish(sessionId, source)
-        const listed = sessionSnapshots.manifest(sessionId)
-        if (listed.ok !== true) return send(res, 503, toolError('UNAVAILABLE', 'The session snapshot is not ready.'))
-        return send(res, 200, cut == null ? listed : { ...listed, beforeSeq: cut })
-      }
       if (req.method === 'GET' && path === '/session-foundations/api/live') {
         const work = getWork()
         if (!work) return send(res, 503, toolError('UNAVAILABLE', 'The work host is not attached yet.'))
@@ -328,9 +281,17 @@ export function registerHttp(
       path: '/dsh-bot',
       handler,
     })
+    const disposeLog = logOnConnection
+      ? null
+      : webServer.register({
+          kind: 'prefix',
+          path: '/api/dsh-bot',
+          handler,
+        })
     return () => {
       if (typeof disposeFoundations === 'function') disposeFoundations()
       if (typeof disposeDesk === 'function') disposeDesk()
+      if (typeof disposeLog === 'function') disposeLog()
     }
   })
 }
@@ -393,26 +354,11 @@ export function memoryView(engine: import('./engine.ts').Engine, sessionId: stri
 }
 
 /**
- * A non-negative integer query, or null when the parameter is absent.
- * @param {URL} url
- * @param {string} name
- * @returns {number | null | false}
- */
-function readCount(url: URL, name: string): number | null | false {
-  const raw = url.searchParams.get(name)
-  if (raw == null || raw === '') return null
-  if (!/^\d+$/.test(raw)) return false
-  const value = Number(raw)
-  if (!Number.isSafeInteger(value)) return false
-  return value
-}
-
-/**
  * @param {import('@deepseek-ai/cordis').Context} ctx
  * @param {import('node:http').IncomingMessage} req
  */
 function reject(ctx: HostContext, req: import('node:http').IncomingMessage) {
-  const connection = ctx.get?.('connection') ?? ctx.connection
+  const connection = probeConnection(ctx)
   const rejection = connection?.requestRejection?.(req)
   if (rejection !== undefined) return rejection
   const remote = req.socket?.remoteAddress ?? ''
@@ -625,4 +571,27 @@ function serveDesk(
   if (req.method === 'HEAD') res.end()
   else createReadStream(file).pipe(res)
   return true
+}
+
+async function asFetchRequest(req: import('node:http').IncomingMessage) {
+  const host = req.headers.host ?? '127.0.0.1'
+  const url = `http://${host}${req.url ?? '/'}`
+  const headers = new Headers()
+  for (const [name, value] of Object.entries(req.headers)) {
+    if (typeof value === 'string') headers.set(name, value)
+    else if (Array.isArray(value)) {
+      for (const item of value) headers.append(name, item)
+    }
+  }
+  return new Request(url, { method: req.method ?? 'GET', headers })
+}
+
+async function sendFetchResponse(res: import('node:http').ServerResponse, response: Response) {
+  const headers: Record<string, string> = {}
+  response.headers.forEach((value, name) => {
+    headers[name] = value
+  })
+  const body = response.body ? Buffer.from(await response.arrayBuffer()) : Buffer.alloc(0)
+  res.writeHead(response.status, headers)
+  res.end(body)
 }

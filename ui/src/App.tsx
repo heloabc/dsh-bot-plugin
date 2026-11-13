@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { api, readJsonStream } from './api'
-import { browserCache, cachedEvent } from './cache'
 import { foundations, foundationsError } from './foundations'
 import { useI18n } from './locale'
 import {
@@ -20,9 +19,19 @@ import { BotChatView } from './BotChatView'
 import { TurnRail } from './TurnRail'
 import { railMarks } from './turn-marks'
 import { botExchange, mainSegments } from './bot-chat'
-import { frameEvents, ingestFrame, isOpeningSnapshot, openingHistoryCut, previewOf } from './follow'
-import { applyValue, FOLLOW_TAIL_MESSAGES } from '../../src/live-diff.ts'
-import { loadSessionRange, loadSessionSnapshot } from './session-snapshot'
+import { applyLogEvent, applyEphemeralFrame, previewOf } from './follow'
+import { applyValue } from './live-patch'
+import {
+  createCdcSnapshotTransport,
+  createEventLogReader,
+  createIdbCheckpoint,
+  createOfficialPageTransport,
+  createPluginRangeTransport,
+  createWsFollowTransport,
+  sessionAddress,
+  type EventLogReader,
+  type SyncStatus,
+} from './sync'
 import { filterMentions, insertMention, mentionQuery, type MentionTarget } from './mentions'
 import {
   emptyThread,
@@ -145,7 +154,7 @@ export function App() {
   const [previews, setPreviews] = useState(() => loadMap('dsh-bot.previews'))
   const [thread, setThread] = useState<ThreadState>(emptyThread)
   const [historySession, setHistorySession] = useState('')
-  const [chunkProgress, setChunkProgress] = useState<{ loaded: number; total: number } | null>(null)
+  const [syncStatus, setSyncStatus] = useState<SyncStatus | null>(null)
   const [threadSession, setThreadSession] = useState(sessionId)
   if (threadSession !== sessionId) {
     setThreadSession(sessionId)
@@ -186,10 +195,7 @@ export function App() {
   const previewKnown = useRef(new Map<string, string>())
   const previewSeeded = useRef(false)
   const sessionRef = useRef(sessionId)
-  const followSwitch = useRef<(id: string) => void>(() => {})
-  const historyPush = useRef<(events: unknown[]) => void>(() => {})
-  const historyCut = useRef<(id: string) => Promise<number | null>>(async () => null)
-  const chunkCache = useRef(browserCache())
+  const readerRef = useRef<EventLogReader | null>(null)
   sessionRef.current = sessionId
 
   function sessionName(item: { sessionId: string; cwd?: string; title?: string | null }): string {
@@ -203,8 +209,16 @@ export function App() {
     return botNames[id] || titles[id] || ''
   }
   const exchange = botExchange(thread.segments)
-  const historyLoading = sessionId !== '' && historySession !== sessionId
-  const chunkBusy = chunkProgress != null && chunkProgress.total > 0 && chunkProgress.loaded < chunkProgress.total
+  const historyLoading =
+    sessionId !== '' &&
+    historySession !== sessionId &&
+    (syncStatus == null ||
+      syncStatus.phase === 'restoring' ||
+      syncStatus.phase === 'connecting' ||
+      (syncStatus.phase === 'syncing' && historySession !== sessionId))
+  const chunkProgress =
+    syncStatus?.fraction != null ? { loaded: Math.round(syncStatus.fraction * 1000), total: 1000 } : null
+  const chunkBusy = syncStatus?.phase === 'syncing' && syncStatus.fraction != null
   const conversation = useMemo(() => mainSegments(thread.segments), [thread.segments])
   const marks = useMemo(() => railMarks(conversation), [conversation])
   const title = sessionId
@@ -457,236 +471,75 @@ export function App() {
   }, [])
 
   useEffect(() => {
-    let stopped = false
-    let socket: WebSocket | null = null
-    let retries = 0
-    let reconnectTimer = 0
-    let activeStream = ''
-    let streamSeq = 0
-    let seen = new Set<number>()
-    let queue: unknown[] = []
-    let raf = 0
-    let cutSession = ''
-    let cutSettled = false
-    let cutValue: number | null = null
-    let cutResolve: ((value: number | null) => void) | null = null
-    const armCut = (id: string) => {
-      if (cutResolve) {
-        const resolve = cutResolve
-        cutResolve = null
-        resolve(null)
-      }
-      cutSession = id
-      cutSettled = false
-      cutValue = null
-    }
-    const settleCut = (id: string, value: number | null) => {
-      if (id !== cutSession || cutSettled) return
-      cutSettled = true
-      cutValue = value
-      if (!cutResolve) return
-      const resolve = cutResolve
-      cutResolve = null
-      resolve(value)
-    }
-    const takeCut = (id: string) => {
-      if (id === cutSession && cutSettled) return Promise.resolve(cutValue)
-      return new Promise<number | null>(resolve => {
-        if (id === cutSession && cutSettled) {
-          resolve(cutValue)
-          return
-        }
-        if (cutResolve) cutResolve(null)
-        cutResolve = resolve
-        cutSession = id
+    let cancelled = false
+    const checkpointReady = createIdbCheckpoint()
+    void checkpointReady.then(checkpoint => {
+      if (cancelled) return
+      readerRef.current = createEventLogReader({
+        follow: createWsFollowTransport({
+          addressOf: id => sessionAddress(id),
+        }),
+        page: createOfficialPageTransport({
+          addressOf: id => sessionAddress(id),
+        }),
+        cdc: createCdcSnapshotTransport({ cache: checkpoint }),
+        range: createPluginRangeTransport(),
+        checkpoint,
       })
-    }
-    const flush = () => {
-      raf = 0
-      if (stopped) return
-      const frames = queue
-      queue = []
-      const session = sessionRef.current
-      const opened = frames.some(frame => isOpeningSnapshot(frame))
-      setThread(prev => frames.reduce<ThreadState>((current, frame) => ingestFrame(current, frame, seen), prev))
-      if (opened && session) {
-        setHistorySession(session)
-        for (const frame of frames) {
-          const cut = openingHistoryCut(frame)
-          if (cut == null) continue
-          settleCut(session, cut)
-          break
-        }
-      }
-      if (session) {
-        const rows = frames.flatMap(frame =>
-          frameEvents(frame).flatMap(event => {
-            const row = cachedEvent(session, event)
-            return row ? [row] : []
-          }),
-        )
-        if (rows.length > 0) void chunkCache.current.putEvents(session, rows).catch(() => {})
-      }
-    }
-    const dropPending = () => {
-      queue = []
-      if (raf) window.cancelAnimationFrame(raf)
-      raf = 0
-      seen = new Set()
-    }
-    const send = (body: unknown) => {
-      if (!socket || socket.readyState !== WebSocket.OPEN) return false
-      socket.send(JSON.stringify(body))
-      return true
-    }
-    const sendOpen = (id: string) => {
-      if (!id) return
-      streamSeq += 1
-      const streamId = `follow-${streamSeq}`
-      const opened = send({
-        type: 'open',
-        streamId,
-        endpoint: 'session/follow',
-        payload: {
-          args: {
-            request: {
-              address: { kind: 'session', sessionId: id },
-              maxMessages: FOLLOW_TAIL_MESSAGES,
-              assistantStream: true,
-            },
-          },
-        },
-      })
-      activeStream = opened ? streamId : ''
-    }
-    const subscribe = (id: string) => {
-      armCut(id)
-      dropPending()
-      if (activeStream) send({ type: 'cancel', streamId: activeStream })
-      activeStream = ''
-      sendOpen(id)
-    }
-    const connect = () => {
-      const proto = location.protocol === 'https:' ? 'wss:' : 'ws:'
-      const next = new WebSocket(`${proto}//${location.host}/api/remote.mux`)
-      socket = next
-      next.addEventListener('open', () => {
-        if (stopped || socket !== next) return
-        retries = 0
-        activeStream = ''
-        sendOpen(sessionRef.current)
-      })
-      next.addEventListener('message', event => {
-        let frame: { type?: unknown; streamId?: unknown }
-        try {
-          frame = JSON.parse(String(event.data)) as { type?: unknown; streamId?: unknown }
-        } catch {
-          return
-        }
-        if (frame.streamId !== activeStream || frame.type !== 'item') return
-        queue.push(frame)
-        if (!raf) raf = window.requestAnimationFrame(flush)
-      })
-      next.addEventListener('close', () => {
-        if (stopped || socket !== next) return
-        activeStream = ''
-        retries += 1
-        if (retries <= 3) reconnectTimer = window.setTimeout(connect, 1000)
-        else settleCut(sessionRef.current, null)
-      })
-    }
-    const pushHistory = (events: unknown[]) => {
-      if (stopped || events.length === 0) return
-      queue.push(...events)
-      if (!raf) raf = window.requestAnimationFrame(flush)
-    }
-    followSwitch.current = subscribe
-    historyPush.current = pushHistory
-    historyCut.current = takeCut
-    connect()
+    })
     return () => {
-      stopped = true
-      followSwitch.current = () => {}
-      historyPush.current = () => {}
-      historyCut.current = async () => null
-      if (cutResolve) cutResolve(null)
-      window.clearTimeout(reconnectTimer)
-      if (raf) window.cancelAnimationFrame(raf)
-      socket?.close()
+      cancelled = true
     }
   }, [])
 
   useEffect(() => {
-    if (sessionId) setThread(emptyThread())
-    setChunkProgress(null)
-    followSwitch.current(sessionId)
-    if (!sessionId) return
-    const cutPromise = historyCut.current(sessionId)
-    let stop = false
-    const paint = (events: unknown[]) => {
-      if (stop || sessionRef.current !== sessionId || events.length === 0) return
-      historyPush.current(events)
-      setHistorySession(sessionId)
+    if (!sessionId) {
+      setHistorySession('')
+      setSyncStatus(null)
+      return
     }
+    setThread(emptyThread())
+    setSyncStatus(null)
+    let stop = false
+    let sub: { close(): void } | null = null
     void (async () => {
-      const cache = chunkCache.current
-      try {
-        await cache.open()
-      } catch {
-        return
-      }
-      if (stop || sessionRef.current !== sessionId) return
-      try {
-        const cached = await cache.readEvents(sessionId)
-        paint(cached.map(row => row.event))
-      } catch {
-        /* the follow socket still fills the thread */
-      }
-      const read = async (path: string, onBytes?: (received: number, total: number | null) => void) => {
-        if (!onBytes) return api(path)
-        const response = await fetch('/dsh-bot/api' + path, { headers: { accept: 'application/json' } })
-        let parsed: unknown = null
-        try {
-          parsed = await readJsonStream(response, onBytes)
-        } catch {
-          parsed = null
-        }
-        const body =
-          parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? (parsed as Record<string, unknown>) : {}
-        return { status: response.status, body }
-      }
-      try {
-        const loaded = await loadSessionSnapshot(
-          sessionId,
-          cache,
-          read,
-          progress => {
-            if (stop || sessionRef.current !== sessionId) return
-            setChunkProgress(progress.loaded < progress.total ? progress : null)
-          },
-          0,
-          undefined,
-          FOLLOW_TAIL_MESSAGES,
-        )
+      const checkpoint = await createIdbCheckpoint()
+      if (stop) return
+      const reader =
+        readerRef.current ??
+        createEventLogReader({
+          follow: createWsFollowTransport({ addressOf: id => sessionAddress(id) }),
+          page: createOfficialPageTransport({ addressOf: id => sessionAddress(id) }),
+          cdc: createCdcSnapshotTransport({ cache: checkpoint }),
+          range: createPluginRangeTransport(),
+          checkpoint,
+        })
+      readerRef.current = reader
+      const subscription = reader.open(sessionId, { enhancement: 'auto' })
+      sub = subscription
+      subscription.onBatch(batch => {
         if (stop || sessionRef.current !== sessionId) return
-        setChunkProgress(null)
-        if (loaded.events?.length) paint(loaded.events)
-        const followSeq = await cutPromise
+        setThread(current => {
+          let next = current
+          for (const event of batch.events) next = applyLogEvent(next, event as any)
+          return next
+        })
+        setHistorySession(sessionId)
+      })
+      subscription.onEphemeral(frame => {
         if (stop || sessionRef.current !== sessionId) return
-        const covered = loaded.beforeSeq
-        const gap =
-          typeof followSeq === 'number' && covered != null && followSeq > covered
-            ? await loadSessionRange(sessionId, covered, followSeq, read)
-            : followSeq == null && covered != null && covered > 0
-              ? await loadSessionRange(sessionId, covered, undefined, read)
-              : null
-        if (gap?.length) paint(gap)
-      } catch {
-        /* a cache miss leaves the live tail on the follow socket */
-      }
+        setThread(current => applyEphemeralFrame(current, frame))
+      })
+      subscription.onStatus(status => {
+        if (stop || sessionRef.current !== sessionId) return
+        setSyncStatus(status)
+        if (status.phase === 'live' || status.phase === 'stalled' || status.phase === 'error')
+          setHistorySession(sessionId)
+      })
     })()
     return () => {
       stop = true
+      sub?.close()
     }
   }, [sessionId])
 

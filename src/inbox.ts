@@ -5,17 +5,13 @@
  */
 
 import type { HostContext } from './host.ts'
+import {
+  createLogSource,
+  logHasMessage as eventsHaveMessage,
+  spliceSeq as seqOfSplice,
+  type LogEvent,
+} from './log/source.ts'
 import { workerFileSetup } from './work-child.ts'
-
-type LogEvent = {
-  type?: string
-  seq?: number | null
-  data?: {
-    id?: string
-    message?: { id?: string }
-    inserted?: Array<{ id?: string }>
-  }
-}
 
 const handles = new Map()
 const loading = new Map()
@@ -88,11 +84,16 @@ export async function followupDurable(ctx: HostContext, sessionId: string, messa
     const message = error instanceof Error ? error.message : String(error)
     if (!message.includes('already pending')) throw error
   }
-  const seq = spliceSeq(agent.session, messageId)
+  let seq: number | null = null
+  try {
+    seq = seqOfSplice((await createLogSource(ctx).read(sessionId, -1)).events, messageId)
+  } catch {
+    seq = spliceSeq(agent.session, messageId)
+  }
   let flushed = false
   let flushError = ''
   try {
-    flushed = (await ctx.sessions.flush(agent.session)) === true
+    flushed = (await ctx.sessions!.flush(agent.session)) === true
   } catch (error) {
     flushError = error instanceof Error ? error.message : String(error)
   }
@@ -110,12 +111,13 @@ export async function followupDurable(ctx: HostContext, sessionId: string, messa
  * @param {{ snapshotEvents?: () => Array<{ type?: string, seq?: number, data?: { inserted?: Array<{ id?: string }> } }> }} session
  * @param {string} messageId
  */
-export function logHasMessage(session: { snapshotEvents?: () => LogEvent[] }, messageId: string) {
-  const events = session.snapshotEvents?.() ?? []
-  return (
-    events.some(event => event.type === 'agent/inbox/spliced' && insertedIds(event).includes(messageId)) ||
-    events.some(event => event.type === 'user/message' && messageIdOf(event) === messageId)
-  )
+export function logHasMessage(session: { snapshotEvents?: () => LogEvent[] } | readonly LogEvent[], messageId: string) {
+  const events = Array.isArray(session)
+    ? session
+    : 'snapshotEvents' in session
+      ? (session.snapshotEvents?.() ?? [])
+      : []
+  return eventsHaveMessage(events, messageId)
 }
 
 /**
@@ -126,30 +128,8 @@ export function logHasMessage(session: { snapshotEvents?: () => LogEvent[] }, me
  * @returns {Promise<Array<{ type?: string, seq?: number, data?: { id?: string, message?: { id?: string }, inserted?: Array<{ id?: string }> } }>>}
  */
 export async function sessionEvents(ctx: HostContext, sessionId: string): Promise<LogEvent[]> {
-  const agent = liveAgent(ctx, sessionId)
-  if (agent?.session?.snapshotEvents) return agent.session.snapshotEvents()
-  const persistence = ctx.sessionPersistence
-  if (!persistence?.open) throw new Error('session log is not readable')
-  /** @type {{ read?: () => Promise<{ events?: unknown[] }>, close?: () => Promise<void> } | undefined} */
-  let handle
-  try {
-    handle = await persistence.open(sessionId, 'read')
-    const page = typeof handle?.read === 'function' ? await handle.read() : { events: [] }
-    return Array.isArray(page?.events) ? page.events : []
-  } catch (error) {
-    if (missingSession(error)) return []
-    throw error
-  } finally {
-    await handle?.close?.().catch(() => {})
-  }
-}
-
-/**
- * @param {unknown} error
- */
-function missingSession(error: unknown) {
-  const name = error instanceof Error ? error.name : ''
-  return name === 'SessionPersistenceNotFoundError' || name === 'SessionNotFoundError'
+  const { events } = await createLogSource(ctx).read(sessionId, -1)
+  return events
 }
 
 /**
@@ -194,14 +174,18 @@ export function userMessage(messageId: string, text: string) {
  * @param {{ data?: { inserted?: Array<{ id?: string }> } }} event
  */
 function insertedIds(event: LogEvent) {
-  const inserted = event.data?.inserted
+  const data =
+    event.data && typeof event.data === 'object' ? (event.data as { inserted?: Array<{ id?: string }> }) : null
+  const inserted = data?.inserted
   if (!Array.isArray(inserted)) return []
-  return inserted.map(message => message?.id).filter(id => typeof id === 'string')
+  return inserted.map(message => message?.id).filter((id): id is string => typeof id === 'string')
 }
 
 /**
  * @param {{ data?: { id?: string, message?: { id?: string } } }} event
  */
 function messageIdOf(event: LogEvent) {
-  return event.data?.id ?? event.data?.message?.id ?? ''
+  const data =
+    event.data && typeof event.data === 'object' ? (event.data as { id?: string; message?: { id?: string } }) : null
+  return data?.id ?? data?.message?.id ?? ''
 }

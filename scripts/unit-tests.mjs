@@ -5,9 +5,16 @@ import { join } from 'node:path'
 const root = join(import.meta.dirname, '..')
 
 function collect(dir) {
-  return readdirSync(join(root, dir))
-    .filter(name => name.endsWith('.test.ts') && !name.includes('host'))
-    .map(name => join(dir, name))
+  const files = []
+  for (const entry of readdirSync(join(root, dir), { withFileTypes: true })) {
+    const rel = join(dir, entry.name)
+    if (entry.isDirectory()) {
+      files.push(...collect(rel))
+      continue
+    }
+    if (entry.name.endsWith('.test.ts') && !entry.name.includes('host')) files.push(rel)
+  }
+  return files
 }
 
 const files = [...collect('test'), ...collect('ui/src')].sort()
