@@ -9,6 +9,7 @@ import { permission } from './permission.ts'
 import { authorization } from './authorization.ts'
 import { cua } from './cua.ts'
 import { work } from './work.ts'
+import { image } from './image.ts'
 
 export type Locale = 'en' | 'zh'
 
@@ -24,6 +25,7 @@ const en = {
   ...permission.en,
   ...authorization.en,
   ...cua.en,
+  ...image.en,
 } as const
 
 const zh: Record<keyof typeof en, string> = {
@@ -38,6 +40,7 @@ const zh: Record<keyof typeof en, string> = {
   ...permission.zh,
   ...authorization.zh,
   ...cua.zh,
+  ...image.zh,
 }
 
 export type MessageKey = keyof typeof en

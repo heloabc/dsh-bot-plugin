@@ -1,5 +1,6 @@
 import { strict as assert } from 'node:assert'
 import { createRequire } from 'node:module'
+import { readFileSync } from 'node:fs'
 import test from 'node:test'
 import { build } from 'esbuild'
 import { parseHTML } from 'linkedom'
@@ -15,12 +16,19 @@ const compiled = await build({
       import { Transcript } from './ui/src/transcript.tsx'
       import { ActivityGroup } from './ui/src/ProcessRow.tsx'
       import { MarkdownView } from './ui/src/MarkdownView.tsx'
+      import { ImageFailureScope } from './ui/src/ImageFailureScope.tsx'
       export { act }
       export function mount(node) {
         const root = createRoot(node)
         return {
           render: props => act(() => root.render(<Transcript {...props} />)),
           group: props => act(() => root.render(<ActivityGroup {...props} />)),
+          image: props => act(() => root.render(<MarkdownView {...props} />)),
+          scopedImage: props => act(() => root.render(
+            <ImageFailureScope key={props.sessionId || 'session-one'}>
+              <MarkdownView key={props.revision || 'initial'} {...props} />
+            </ImageFailureScope>
+          )),
           close: () => act(() => root.unmount())
         }
       }
@@ -56,11 +64,21 @@ function harness() {
   const globals = {
     window,
     document,
+    HTMLElement: window.HTMLElement,
     IS_REACT_ACT_ENVIRONMENT: true,
     requestAnimationFrame: (fn: () => void) => setTimeout(fn, 0),
     cancelAnimationFrame: (id: ReturnType<typeof setTimeout>) => clearTimeout(id),
   }
   Object.assign(window, { matchMedia: () => ({ matches: true }) })
+  // linkedom has no focus implementation; model browser focus and focusin so
+  // the mounted dialog's own trap/restore handlers are exercised, not stubbed.
+  let focused: Element | null = null
+  const previousFocus = window.HTMLElement.prototype.focus
+  Object.defineProperty(document, 'activeElement', { configurable: true, get: () => focused })
+  window.HTMLElement.prototype.focus = function () {
+    focused = this as unknown as Element
+    this.dispatchEvent(new window.Event('focusin', { bubbles: true }))
+  }
   for (const [key, value] of Object.entries(globals)) {
     saved.set(key, Object.getOwnPropertyDescriptor(globalThis, key))
     Object.defineProperty(globalThis, key, { value, configurable: true, writable: true })
@@ -72,7 +90,13 @@ function harness() {
     mod.exports,
   )
   const container = document.querySelector('main')!
-  const mounted = mod.exports.mount(container)
+  const mounted = mod.exports.mount(container) as {
+    render(props: unknown): Promise<void>
+    group(props: unknown): Promise<void>
+    image(props: unknown): Promise<void>
+    scopedImage(props: unknown): Promise<void>
+    close(): Promise<void>
+  }
   return {
     ...mounted,
     markdown: mod.exports.markdown,
@@ -80,6 +104,7 @@ function harness() {
     act: mod.exports.act,
     async close() {
       await mounted.close()
+      window.HTMLElement.prototype.focus = previousFocus
       for (const [key, descriptor] of saved) {
         if (descriptor) Object.defineProperty(globalThis, key, descriptor)
         else Reflect.deleteProperty(globalThis, key)
@@ -208,6 +233,165 @@ test('Markdown images keep absolute URLs and resolve relative images under the a
     assert.match(html, /src="https:\/\/tobs\.thready\.org\/dsh-bot\/coffee-page\/preview\/desktop.jpg"/)
     assert.match(html, /src="\/dsh-bot\/coffee-page\/preview\/mobile.png"/)
     assert.doesNotMatch(h.markdown('![unsafe](javascript:alert)'), /src="javascript:/)
+  } finally {
+    await h.close()
+  }
+})
+
+test('image preview opens fitted, scrolls at original size, traps focus and restores it on Escape', async () => {
+  const h = harness()
+  const doc = h.container.ownerDocument
+  const key = (value: string, shiftKey = false) => {
+    const event = new doc.defaultView!.Event('keydown', { bubbles: true, cancelable: true })
+    Object.defineProperties(event, { key: { value }, shiftKey: { value: shiftKey } })
+    doc.dispatchEvent(event)
+    return event
+  }
+  try {
+    doc.body.style.overflow = 'auto'
+    await h.image({ text: '![Long screenshot](coffee-page/preview/desktop.jpg)' })
+    const trigger = h.container.querySelector<HTMLButtonElement>('.image-preview-trigger')!
+    assert.equal(trigger.getAttribute('aria-haspopup'), 'dialog')
+    assert.equal(trigger.querySelector('img')!.getAttribute('src'), '/dsh-bot/coffee-page/preview/desktop.jpg')
+    trigger.focus()
+    await h.act(() => trigger.click())
+    const dialog = doc.querySelector<HTMLElement>('[role="dialog"]')!
+    assert.ok(dialog)
+    assert.equal(dialog.getAttribute('aria-modal'), 'true')
+    assert.equal(dialog.getAttribute('aria-label'), 'Long screenshot')
+    assert.equal(doc.body.style.overflow, 'hidden')
+    assert.equal(trigger.getAttribute('aria-expanded'), 'true')
+    const close = dialog.querySelector<HTMLButtonElement>('[aria-label="Close image preview"]')!
+    const zoom = dialog.querySelector<HTMLButtonElement>('[aria-pressed]')!
+    const stage = dialog.querySelector<HTMLElement>('.image-lightbox-stage')!
+    assert.equal(doc.activeElement, close)
+    assert.equal(zoom.textContent, 'Original size')
+    assert.ok(!stage.classList.contains('original'))
+    await h.act(() => zoom.click())
+    assert.equal(zoom.getAttribute('aria-pressed'), 'true')
+    assert.equal(zoom.textContent, 'Fit to screen')
+    assert.ok(stage.classList.contains('original'))
+    stage.scrollTop = 4000
+    stage.scrollLeft = 200
+    await h.act(() => zoom.click())
+    assert.equal(stage.scrollTop, 0)
+    assert.equal(stage.scrollLeft, 0)
+    assert.ok(!stage.classList.contains('original'))
+    stage.focus()
+    const tab = key('Tab')
+    assert.equal(tab.defaultPrevented, true)
+    assert.equal(doc.activeElement, zoom, 'Tab wraps from scroll region to first control')
+    key('Tab', true)
+    assert.equal(doc.activeElement, stage, 'Shift+Tab wraps to the last focus target')
+    await h.act(() => key('Escape'))
+    assert.equal(doc.querySelector('[role="dialog"]'), null)
+    assert.equal(doc.body.style.overflow, 'auto')
+    assert.equal(doc.activeElement, trigger)
+    assert.equal(trigger.getAttribute('aria-expanded'), 'false')
+  } finally {
+    await h.close()
+  }
+})
+
+test('linked Markdown thumbnails avoid nested interactive elements and close by backdrop or button', async () => {
+  const h = harness()
+  const doc = h.container.ownerDocument
+  try {
+    await h.image({ text: '[![Desktop](coffee-page/preview/desktop.jpg)](https://example.com/original)' })
+    const trigger = h.container.querySelector<HTMLButtonElement>('.image-preview-trigger')!
+    const link = h.container.querySelector('a')!
+    assert.equal(link.getAttribute('href'), 'https://example.com/original')
+    assert.equal(link.textContent, 'Open image link')
+    assert.equal(trigger.closest('a'), null)
+    assert.equal(link.querySelector('button'), null)
+    trigger.focus()
+    await h.act(() => trigger.click())
+    await h.act(() => doc.querySelector<HTMLElement>('.image-lightbox')!.click())
+    assert.equal(doc.querySelector('[role="dialog"]'), null)
+    await h.act(() => trigger.click())
+    await h.act(() => doc.querySelector<HTMLButtonElement>('[aria-label="Close image preview"]')!.click())
+    assert.equal(doc.querySelector('[role="dialog"]'), null)
+    await h.act(() => trigger.click())
+    await h.image({ text: 'image removed during replay' })
+    assert.equal(doc.querySelector('[role="dialog"]'), null)
+    assert.notEqual(doc.body.style.overflow, 'hidden', 'unmount must release scroll lock')
+  } finally {
+    await h.close()
+  }
+})
+
+test('image thumbnail bounds both axes and viewer supports fit, original-size scrolling and mobile', () => {
+  const css = readFileSync(new URL('../ui/src/styles.css', import.meta.url), 'utf8')
+  const thumbnail = css.slice(css.indexOf('.markdown .image-preview-thumbnail {'))
+  assert.match(thumbnail, /max-width: 100%/)
+  assert.match(thumbnail, /max-height: min\(20rem, 40vh\)/)
+  assert.match(thumbnail, /object-fit: contain/)
+  assert.match(css, /\.image-preview-trigger \{[^}]*max-width: min\(100%, 32rem\)/s)
+  assert.match(css, /\.image-lightbox-stage \{[^}]*overflow: auto/s)
+  assert.match(css, /\.image-lightbox-stage\.original img \{[^}]*max-width: none;[^}]*max-height: none/s)
+  assert.match(css, /@media \(max-width: 600px\) \{\s*\.image-lightbox/)
+})
+
+test('polling callback changes keep image nodes mounted; failures survive rerender and replay remount until manual retry', async () => {
+  const h = harness()
+  const doc = h.container.ownerDocument
+  const text = '![Desktop](coffee-page/preview/desktop.jpg)\n\n![Mobile](coffee-page/preview/mobile.jpg)'
+  const error = (img: Element) => h.act(() => img.dispatchEvent(new doc.defaultView!.Event('error')))
+  try {
+    await h.scopedImage({ text, onOpenFile() {} })
+    const initial = [...h.container.querySelectorAll('img')]
+    assert.equal(initial.length, 2)
+    // App creates a new onOpenFile on each interactions/status poll. This used
+    // to recreate the component map, remount <img>, and reissue its request.
+    for (let i = 0; i < 5; i++) {
+      await h.scopedImage({ text, streaming: i % 2 === 0, onOpenFile() {} })
+      assert.deepEqual([...h.container.querySelectorAll('img')], initial)
+    }
+    for (const img of initial) await error(img)
+    assert.equal(h.container.querySelectorAll('img').length, 0, 'failed elements and src must be removed')
+    assert.match(h.container.textContent!, /Image unavailable; the file may have been removed/)
+    assert.match(h.container.textContent!, /Desktop/)
+    for (let i = 0; i < 6; i++) {
+      await h.scopedImage({ text, revision: `replay-${i}`, streaming: i % 2 === 0, onOpenFile() {} })
+      assert.equal(h.container.querySelectorAll('img').length, 0, 'polling or replay must not retry failed src')
+      assert.equal(doc.querySelector('[role="dialog"]'), null)
+    }
+    let retry = h.container.querySelector<HTMLButtonElement>('.image-unavailable button')!
+    await h.act(() => retry.click())
+    assert.equal(h.container.querySelectorAll('img').length, 1, 'one manual retry adds just that thumbnail')
+    await error(h.container.querySelector('img')!)
+    assert.equal(h.container.querySelectorAll('img').length, 0)
+    retry = h.container.querySelector<HTMLButtonElement>('.image-unavailable button')!
+    await h.act(() => retry.click())
+    const recovered = h.container.querySelector('img')!
+    await h.act(() => recovered.dispatchEvent(new doc.defaultView!.Event('load')))
+    await h.scopedImage({ text, onOpenFile() {}, revision: 'replay-5' })
+    assert.equal(h.container.querySelector('img'), recovered, 'recovery does not remount on next poll')
+    await h.scopedImage({ text: '![New image](coffee-page/preview/new.jpg)', revision: 'new' })
+    assert.match(h.container.querySelector('img')!.getAttribute('src')!, /new.jpg$/)
+    await h.scopedImage({ text, sessionId: 'session-two' })
+    assert.equal(h.container.querySelectorAll('img').length, 2, 'a new session view does not inherit failures')
+  } finally {
+    await h.close()
+  }
+})
+
+test('viewer error releases modal state, shows neutral unavailable message and never retries on polling', async () => {
+  const h = harness()
+  const doc = h.container.ownerDocument
+  const text = '![Long screenshot](coffee-page/preview/desktop.jpg)'
+  try {
+    await h.scopedImage({ text })
+    await h.act(() => h.container.querySelector<HTMLButtonElement>('.image-preview-trigger')!.click())
+    const viewer = doc.querySelector('.image-lightbox img')!
+    await h.act(() => viewer.dispatchEvent(new doc.defaultView!.Event('error')))
+    assert.equal(doc.querySelector('[role="dialog"]'), null)
+    assert.equal(doc.querySelector('img'), null)
+    assert.notEqual(doc.body.style.overflow, 'hidden')
+    assert.match(h.container.textContent!, /may have been removed/)
+    for (let i = 0; i < 3; i++) await h.scopedImage({ text, revision: String(i), onOpenFile() {} })
+    assert.equal(doc.querySelector('img'), null)
+    assert.equal(doc.querySelector('[role="dialog"]'), null)
   } finally {
     await h.close()
   }

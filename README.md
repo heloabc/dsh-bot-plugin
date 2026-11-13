@@ -117,6 +117,10 @@ Workbench sessions start in `THREADY_SESSION_CWD` when set, otherwise in `<DSH_H
 
 Generated raster previews can be embedded at `/dsh-bot/<project>/preview/<image>` or `/dsh-bot/<project>/artifacts/<image>`. These are deliberate artifact directories under that configured workspace, not a general file server or a per-session sharing boundary: authenticated workbench users can view their images. Only JPEG, PNG, GIF and WebP with matching signatures are served, with private/no-store caching. Dotfiles, traversal, symlink escapes, other workspace locations and active HTML/SVG are rejected. With no configured workspace this fallback is disabled. Relative Markdown image paths resolve under `/dsh-bot/`; existing absolute URLs remain unchanged.
 
+Markdown images use bounded, aspect-preserving thumbnails. Click to open a viewport-fit dialog, then choose Original size to scroll through screenshot details. Escape, the close button or the backdrop dismisses it, restoring focus and body scrolling. Linked images expose their link separately from the preview control. Preview and unavailable-state labels follow the English/Chinese UI catalog.
+
+A failed thumbnail or viewer image is removed and replaced with a neutral unavailable message and an explicit Retry image button; status/interaction polling does not retry it. Markdown renderer identities stay stable when file callbacks or streaming state change. Failure memory belongs to the current mounted session view (up to 128 URLs, each at most 4096 characters), not global state or browser storage; mounted images also retain local failure state. Session navigation/reload clears it. A cache-evicted image can be attempted again if later remounted. Nothing restores deleted workspace files or retains artifact copies.
+
 Actions folds keep their initial view until the user toggles them. Streaming updates, new actions, live-to-durable event replacement and completion do not automatically open or close an existing fold. Text and question boundaries still separate action groups in transcript order.
 
 

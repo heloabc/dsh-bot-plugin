@@ -16,6 +16,7 @@ import { FilePreview } from './FilePreview'
 import { NewSessionSheet, useSessionBasis } from './NewSession'
 import { BotChatView } from './BotChatView'
 import { TurnRail } from './TurnRail'
+import { ImageFailureScope } from './ImageFailureScope'
 import { CurrentActivity } from './CurrentActivity'
 import { currentActivity } from './current-activity'
 import { AuthorizationPanel, CuaPanel, PermissionPanel } from './SettingsPanels'
@@ -1161,39 +1162,41 @@ export function App() {
               works.length === 0 ? (
                 <p className="empty-thread">{t('nav.empty')}</p>
               ) : null}
-              {historyLoading ? null : botChat ? (
-                <BotChatView
-                  items={exchange}
-                  botLabel={botLabel}
-                  onOpenFile={(path, line) => setFilePreview({ path, line })}
-                />
-              ) : (
-                <Transcript
-                  sessionId={sessionId}
-                  cwd={items.find(s => s.sessionId === sessionId)?.cwd}
-                  connectionPhase={syncStatus?.phase}
-                  segments={conversation}
-                  approvals={approvals}
-                  questionWaits={questionWaits}
-                  onCompose={text => placeDraft(text, text.length)}
-                  completed={thread.completed}
-                  failures={thread.failures}
-                  retries={thread.retries}
-                  turnEnds={thread.turnEnds}
-                  tickets={works}
-                  now={workNow}
-                  canRetry={Boolean(sessionId) && execution.ready && !turnLive}
-                  onRetry={text => {
-                    void submit(text)
-                  }}
-                  onSupply={supplyWork}
-                  onOpenSession={openWorkerSession}
-                  onOpenFile={(path, line) => setFilePreview({ path, line })}
-                  onOpenInbox={() => setBotChat(true)}
-                  botLabel={botLabel}
-                  chat={isBotSession}
-                />
-              )}
+              <ImageFailureScope key={sessionId}>
+                {historyLoading ? null : botChat ? (
+                  <BotChatView
+                    items={exchange}
+                    botLabel={botLabel}
+                    onOpenFile={(path, line) => setFilePreview({ path, line })}
+                  />
+                ) : (
+                  <Transcript
+                    sessionId={sessionId}
+                    cwd={items.find(s => s.sessionId === sessionId)?.cwd}
+                    connectionPhase={syncStatus?.phase}
+                    segments={conversation}
+                    approvals={approvals}
+                    questionWaits={questionWaits}
+                    onCompose={text => placeDraft(text, text.length)}
+                    completed={thread.completed}
+                    failures={thread.failures}
+                    retries={thread.retries}
+                    turnEnds={thread.turnEnds}
+                    tickets={works}
+                    now={workNow}
+                    canRetry={Boolean(sessionId) && execution.ready && !turnLive}
+                    onRetry={text => {
+                      void submit(text)
+                    }}
+                    onSupply={supplyWork}
+                    onOpenSession={openWorkerSession}
+                    onOpenFile={(path, line) => setFilePreview({ path, line })}
+                    onOpenInbox={() => setBotChat(true)}
+                    botLabel={botLabel}
+                    chat={isBotSession}
+                  />
+                )}
+              </ImageFailureScope>
             </div>
           </div>
           {botChat || historyLoading ? null : (
