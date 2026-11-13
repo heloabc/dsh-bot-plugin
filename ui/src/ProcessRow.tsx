@@ -72,7 +72,11 @@ export function ActivityGroup({
           <ToolIcon />
           <Chevron />
         </span>
-        <span className="official-label">{t('activity.titleWithCount', { count: String(segments.length) })}</span>
+        <span className="official-label">
+          {segments.length === 1
+            ? t('activity.titleOne')
+            : t('activity.titleWithCount', { count: String(segments.length) })}
+        </span>
         {counts ? <span className="activity-status">{counts}</span> : null}
         {stale ? (
           <span className="activity-status">
