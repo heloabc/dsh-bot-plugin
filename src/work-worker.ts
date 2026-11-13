@@ -2,7 +2,13 @@ import { randomUUID } from 'node:crypto'
 import { sha256 } from './fs-safe.ts'
 import { toolError } from './errors.ts'
 import { createTicketBook } from './work-tickets.ts'
-import { decideAdmission, budgetTrip, estimateWorkerBudget, DEFAULT_WORK_BUDGET } from './work-admit.ts'
+import {
+  decideAdmission,
+  budgetTrip,
+  estimateWorkerBudget,
+  DEFAULT_WORK_BUDGET,
+  effectiveWorkLimits,
+} from './work-admit.ts'
 import {
   messageIdOf,
   pushInput,
@@ -105,10 +111,15 @@ export function createWorkRuntime(
 ) {
   const now = options.now ?? (() => new Date())
   const limits = { ...DEFAULT_WORK_BUDGET, ...options.budget }
+  const slots = effectiveWorkLimits(limits)
   const pid = options.pid ?? process.pid
   const resident = options.resident !== false
   const book = createTicketBook(store.db, store.root, now)
   const inflight = new Set<string>()
+  /** Ticket ids currently in ensureChild / flush, so a tick cannot start the same ticket twice. */
+  const starting = new Set<string>()
+  /** In-flight startReserved promises, so a later promoteQueued can join them. */
+  const startingPromises = new Map<string, Promise<any>>()
   /** @type {Map<string, { messageId: string, turn: number | null, seq: number | null }>} */
   const turns: Map<string, { messageId: string; turn: number | null; seq: number | null }> = new Map()
   /** @type {Map<string, string>} */
@@ -154,6 +165,7 @@ export function createWorkRuntime(
     releaseHold,
     tick,
     admit,
+    promoteQueued,
     observeSession,
     observeClaimed,
     gateStep,
@@ -171,6 +183,179 @@ export function createWorkRuntime(
    */
   function isWorkerSession(sessionId: string) {
     return book.attemptForChild(sessionId) != null
+  }
+
+  /**
+   * A running slot is free when both the per-bot and global running caps have room.
+   * needs_user does not occupy a running slot.
+   * @param {string} owner
+   */
+  function hasSlot(owner: string) {
+    return book.countSlots(owner) < slots.perBot && book.countGlobalSlots() < slots.global
+  }
+
+  /**
+   * Queue room is separate from running slots. The combined unfinished cap is
+   * slots + queue, so parked needs_user tickets cannot grow without bound.
+   * @param {string} owner
+   */
+  function canQueue(owner: string) {
+    return (
+      book.countQueued(owner) < slots.perBotQueue &&
+      book.countGlobalQueued() < slots.globalQueue &&
+      book.countActive(owner) < slots.perBot + slots.perBotQueue &&
+      book.countGlobal() < slots.global + slots.globalQueue
+    )
+  }
+
+  /**
+   * @param {string} owner
+   * @returns {'start' | 'queue' | 'refuse'}
+   */
+  function underCombinedCap(owner: string) {
+    return (
+      book.countActive(owner) < slots.perBot + slots.perBotQueue &&
+      book.countGlobal() < slots.global + slots.globalQueue
+    )
+  }
+
+  /**
+   * @param {string} owner
+   * @returns {'start' | 'queue' | 'refuse'}
+   */
+  function decideDispatch(owner: string) {
+    // needs_user does not occupy a running slot, but it still counts as unfinished.
+    // A free slot must not admit a new ticket once the combined cap is full.
+    if (!underCombinedCap(owner)) return 'refuse'
+    if (hasSlot(owner)) return 'start'
+    if (canQueue(owner)) return 'queue'
+    return 'refuse'
+  }
+
+  /**
+   * Create the child if needed and flush the current briefing or supply.
+   * @param {Record<string, any>} ticket
+   */
+  async function startReserved(ticket: Record<string, any>) {
+    if (!resident) {
+      return { ...publicDispatch(ticket), flush: 'pending', resident: false, message: 'Only a resident host continues' }
+    }
+    if (starting.has(ticket.id)) {
+      return startingPromises.get(ticket.id) ?? publicDispatch(book.ticket(ticket.id) ?? ticket, { flush: 'pending' })
+    }
+    starting.add(ticket.id)
+    const run = (async () => {
+      const current = book.ticket(ticket.id)
+      if (!current) return toolError('NOT_FOUND', 'No such ticket.')
+      if (current.status === 'cancelled' || current.status === 'failed' || current.status === 'delivered') {
+        return publicDispatch(current)
+      }
+      const created = await ensureChild(current)
+      if (created.error) return created.error
+      if (created.rejected) return publicDispatch(created.ticket ?? book.ticket(ticket.id) ?? current)
+      const liveAfterStart = book.ticket(ticket.id)
+      if (
+        !liveAfterStart ||
+        liveAfterStart.status === 'cancelled' ||
+        liveAfterStart.status === 'failed' ||
+        liveAfterStart.status === 'delivered'
+      ) {
+        return publicDispatch(liveAfterStart ?? current)
+      }
+      const input = await store.write('work', () => {
+        const live = book.ticket(ticket.id)
+        const liveAttempt = book.attempt(live.active_attempt_id)
+        if (liveAttempt?.current_input_id) {
+          const existing = book.input(liveAttempt.current_input_id)
+          if (existing) return existing
+        }
+        const text = book.readBriefing(live.briefing_hash)
+        return book.insertInput({
+          ticketId: live.id,
+          attemptId: liveAttempt.id,
+          revision: live.briefing_revision,
+          kind: 'briefing',
+          text,
+        })
+      })
+      if (input.flush_status === 'accepted') {
+        return publicDispatch(book.ticket(ticket.id), { flush: 'accepted', nativeMessageId: input.native_message_id })
+      }
+      const flushed = await pushInput(book, input, deps)
+      return publicDispatch(book.ticket(ticket.id), {
+        flush: flushWord(flushed),
+        nativeMessageId: input.native_message_id,
+      })
+    })()
+    startingPromises.set(ticket.id, run)
+    try {
+      return await run
+    } finally {
+      starting.delete(ticket.id)
+      startingPromises.delete(ticket.id)
+    }
+  }
+
+  /**
+   * Start waiting tickets that now fit a slot. Awaits only starts this call
+   * launched, so a hung createChild from an earlier call cannot deadlock
+   * later ticks or cancel. The earlier promise stays owned until it finishes
+   * and is then attached or cleaned up.
+   */
+  async function promoteQueued() {
+    if (!resident) return { started: [] }
+    const started: string[] = []
+    const launched: Promise<unknown>[] = []
+    const launch = (ticket: Record<string, any> | null) => {
+      if (!ticket?.id || starting.has(ticket.id)) return
+      started.push(ticket.id)
+      launched.push(
+        startReserved(ticket).catch(error => {
+          options.log?.(
+            'warn',
+            `session-foundations: startReserved failed ticket=${ticket.id} ${error instanceof Error ? error.message : String(error)}`,
+          )
+          return error
+        }),
+      )
+    }
+    for (const ticket of book.heldStarts()) launch(ticket)
+    for (;;) {
+      const claimed = await store.write('work', () => {
+        for (const ticket of book.nextPromotable()) {
+          if (book.slotHeld(ticket)) continue
+          if (ticket.status !== 'accepted' && ticket.status !== 'needs_user') continue
+          if (!hasSlot(ticket.owner_session_id)) continue
+          return book.reserveSlot(ticket.id)
+        }
+        return null
+      })
+      if (!claimed) break
+      launch(claimed)
+    }
+    await Promise.all(launched)
+    // Join in-flight starts that are still allowed to attach. Do not join a
+    // hung createChild after the ticket has already been cancelled, failed, or
+    // expired, so a later tick can free the slot and start the next waiter.
+    const pending = [...startingPromises.entries()]
+      .filter(([id]) => {
+        const ticket = book.ticket(id)
+        return (
+          ticket != null && ticket.status !== 'failed' && ticket.status !== 'cancelled' && ticket.status !== 'delivered'
+        )
+      })
+      .map(([, promise]) => promise)
+    await Promise.all(pending)
+    return { started }
+  }
+
+  function schedulePromote() {
+    void promoteQueued().catch(error => {
+      options.log?.(
+        'warn',
+        `session-foundations: promoteQueued failed ${error instanceof Error ? error.message : String(error)}`,
+      )
+    })
   }
 
   /**
@@ -200,49 +385,40 @@ export function createWorkRuntime(
           return { replay: existing }
         }
       }
-      if (book.countActive(owner) >= limits.perBot || book.countGlobal() >= limits.global) {
+      const decision = decideDispatch(owner)
+      if (decision === 'refuse') {
         return {
           error: toolError(
             'BUDGET',
-            'Unfinished tickets already hit the host concurrency limit, so no row was created.',
+            'Unfinished tickets already hit the host slot and queue limits, so no row was created.',
           ),
         }
       }
-      return {
-        created: book.insertAccepted({
-          owner,
-          briefing,
-          idempotencyKey: key,
-          correlationId: correlationOf(owner, args.correlationId),
-          budget,
-        }),
-      }
+      const created = book.insertAccepted({
+        owner,
+        briefing,
+        idempotencyKey: key,
+        correlationId: correlationOf(owner, args.correlationId),
+        budget,
+      })
+      if (decision === 'start') book.reserveSlot(created.ticket.id)
+      return { created, start: decision === 'start' }
     })
     if (prepared.error) return prepared.error
     if (prepared.replay) return publicDispatch(prepared.replay, { replayed: true })
     const ticket = prepared.created.ticket
+    if (!prepared.start) {
+      return publicDispatch(book.ticket(ticket.id), {
+        flush: 'pending',
+        queued: true,
+        childSessionId: null,
+        nativeMessageId: null,
+      })
+    }
     if (!resident) {
       return { ...publicDispatch(ticket), flush: 'pending', resident: false, message: 'Only a resident host continues' }
     }
-    const created = await ensureChild(ticket)
-    if (created.error) return created.error
-    const input = await store.write('work', () => {
-      const current = book.ticket(ticket.id)
-      const attempt = book.attempt(current.active_attempt_id)
-      if (attempt?.current_input_id) return book.input(attempt.current_input_id)
-      return book.insertInput({
-        ticketId: current.id,
-        attemptId: attempt.id,
-        revision: current.briefing_revision,
-        kind: 'briefing',
-        text: briefing,
-      })
-    })
-    const flushed = await pushInput(book, input, deps)
-    return publicDispatch(book.ticket(ticket.id), {
-      flush: flushWord(flushed),
-      nativeMessageId: input.native_message_id,
-    })
+    return startReserved(ticket)
   }
 
   /**
@@ -273,8 +449,25 @@ export function createWorkRuntime(
     const found = resolveTicket(owner, args.ticketId, kind === 'supply' ? ['needs_user', 'enqueued'] : null)
     if (found.error) return found.error
     const expected = revisionOf(args.expectedRevision)
-    const advanced = await store.write('work', () => book.advanceGeneration(found.ticket.id, expected, kind, text))
+    const advanced = await store.write('work', () => {
+      const result = book.advanceGeneration(found.ticket.id, expected, kind, text)
+      if (result.error) return result
+      // A supply into needs_user must take a running slot. If none is free, keep
+      // the input durable and start it when promoteQueued reserves one.
+      if (kind === 'supply' && result.ticket.status === 'needs_user' && !hasSlot(owner)) {
+        return { ...result, queued: true }
+      }
+      if (kind === 'supply' && result.ticket.status === 'needs_user') book.reserveSlot(result.ticket.id)
+      return result
+    })
     if (advanced.error) return toolError(advanced.error, advanced.message ?? 'Changing the generation failed.')
+    if (advanced.queued) {
+      return publicDispatch(book.ticket(found.ticket.id), {
+        flush: 'pending',
+        queued: true,
+        nativeMessageId: advanced.input.native_message_id,
+      })
+    }
     if (!resident)
       return { ...publicDispatch(advanced.ticket), flush: 'pending', message: 'Only a resident host continues' }
     const flushed = await pushInput(book, advanced.input, deps)
@@ -302,6 +495,7 @@ export function createWorkRuntime(
     }
     if (resident && note !== '' && cancelled.input) await pushInput(book, cancelled.input, deps)
     await removeUnclaimed(owner, cancelled.ticket.id)
+    schedulePromote()
     return {
       ok: true,
       ticketId: cancelled.ticket.id,
@@ -327,6 +521,7 @@ export function createWorkRuntime(
         state.clear?.()
       }
       if (resident && child && options.cancel) await options.cancel(child, { keepInbox: false, reason: 'grant-denied' })
+      schedulePromote()
       return { ok: true, ticketId: found.ticket.id, ticketStatus: 'failed', denied: true }
     }
     const added = await store.write('work', () =>
@@ -356,17 +551,24 @@ export function createWorkRuntime(
     const found = resolveTicket(owner, args.ticketId, ['failed', 'cancelled'])
     if (found.error) return found.error
     const expected = revisionOf(args.expectedRevision)
-    const retried = await store.write('work', () => book.insertRetry(found.ticket.id, expected))
+    const retried = await store.write('work', () => {
+      const result = book.insertRetry(found.ticket.id, expected)
+      if (result.error) return result
+      if (!hasSlot(owner)) return { ...result, queued: true }
+      book.reserveSlot(result.ticket.id)
+      return result
+    })
     if (retried.error) return toolError(retried.error, retried.message ?? 'Retry failed.')
+    if (retried.queued) {
+      return publicDispatch(book.ticket(retried.ticket.id), {
+        flush: 'pending',
+        queued: true,
+        nativeMessageId: retried.input?.native_message_id ?? null,
+      })
+    }
     if (!resident)
       return { ...publicDispatch(retried.ticket), flush: 'pending', message: 'Only a resident host continues' }
-    const ensured = await ensureChild(retried.ticket)
-    if (ensured.error) return ensured.error
-    const flushed = await pushInput(book, retried.input, deps)
-    return publicDispatch(book.ticket(retried.ticket.id), {
-      flush: flushWord(flushed),
-      nativeMessageId: retried.input.native_message_id,
-    })
+    return startReserved(book.ticket(retried.ticket.id))
   }
 
   /**
@@ -508,6 +710,7 @@ export function createWorkRuntime(
     }
     for (const child of book.childIds()) await reconcileChild(child)
     for (const owner of book.ownerIds()) await reconcileOwner(owner)
+    await promoteQueued()
   }
 
   /**
@@ -658,17 +861,27 @@ export function createWorkRuntime(
     if (ticket.child_session_id) return { ticket }
     if (!options.createChild) return { error: publicDispatch(ticket, { flush: 'pending' }) }
     const sessionId = `worker-${ticket.id}`
+    const attemptId = ticket.active_attempt_id
+    const fencingToken = book.attempt(attemptId)?.fencing_token ?? 1
     try {
       const created = await options.createChild({
         sessionId,
         ownerSessionId: ticket.owner_session_id,
         ticketId: ticket.id,
-        fencingToken: book.attempt(ticket.active_attempt_id)?.fencing_token ?? 1,
+        fencingToken,
       })
       const child = typeof created === 'string' && created !== '' ? created : sessionId
+      const saved = await store.write('work', () => book.setChildIfEmpty(ticket.id, child, { attemptId, fencingToken }))
+      if (!saved?.attached) {
+        try {
+          if (options.cancel) await options.cancel(child, { keepInbox: false, reason: 'stale-start' })
+        } catch {
+          /* best-effort cleanup of a late or fenced child */
+        }
+        return { rejected: true, ticket: saved?.ticket ?? book.ticket(ticket.id) ?? ticket }
+      }
       engine.ensureSession(child)
-      const saved = await store.write('work', () => book.setChildIfEmpty(ticket.id, child))
-      return { ticket: saved }
+      return { ticket: saved.ticket }
     } catch {
       return {
         error: publicDispatch(book.ticket(ticket.id), {
@@ -729,7 +942,13 @@ export function createWorkRuntime(
    */
   function publicDispatch(
     ticket: Record<string, any>,
-    extra: { replayed?: boolean; flush?: string; nativeMessageId?: string | null; childSessionId?: string | null } = {},
+    extra: {
+      replayed?: boolean
+      flush?: string
+      nativeMessageId?: string | null
+      childSessionId?: string | null
+      queued?: boolean
+    } = {},
   ) {
     const fresh = book.ticket(ticket.id) ?? ticket
     const attempt = fresh.active_attempt_id ? book.attempt(fresh.active_attempt_id) : null
@@ -755,6 +974,7 @@ export function createWorkRuntime(
       nativeMessageId: extra.nativeMessageId === undefined ? (input?.native_message_id ?? null) : extra.nativeMessageId,
       flush,
       replayed: extra.replayed === true,
+      queued: extra.queued === true || (fresh.status === 'accepted' && !book.slotHeld(fresh)),
     }
   }
 
@@ -789,12 +1009,15 @@ export function createWorkRuntime(
     if (!input) return
     const found = book.detail(input.ticket_id)
     if (!found) return
+    let released = false
     for (const event of found.events) {
       if (event.attempt_id !== input.attempt_id) continue
       if (event.briefing_revision !== input.briefing_revision) continue
       if (event.apply_status !== 'pending_completion') continue
       book.applyTerminal(event.event_id, reason)
+      released = true
     }
+    if (released) void promoteQueued().catch(() => {})
   }
 
   /**
@@ -1278,6 +1501,7 @@ export function createWorkRuntime(
     )
     const attempt = book.attemptForChild(sessionId)
     if (attempt) book.failRunning(attempt.ticket_id, reason)
+    void promoteQueued().catch(() => {})
   }
 
   /**

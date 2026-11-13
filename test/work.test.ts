@@ -431,8 +431,8 @@ test('cancel drops an unclaimed notice and a later result cannot be published', 
   ctx.close()
 })
 
-test('concurrency budget refuses the second ticket without inserting it', async () => {
-  const ctx = boot()
+test('tight slot and queue caps refuse the next ticket without inserting it', async () => {
+  const ctx = boot({ perBot: 1, global: 2, perBotQueue: 0, globalQueue: 0 })
   const first = await dispatched(ctx, 'the first job', 'one')
   assert.equal(first.ok, true)
   const second = await ctx.work.dispatch('bot-a', { briefing: 'the second job', idempotencyKey: 'two' })

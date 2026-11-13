@@ -822,8 +822,10 @@ a {
 }
 .scroll {
   flex: 1;
+  min-width: 0;
   min-height: 0;
-  overflow: auto;
+  overflow-x: hidden;
+  overflow-y: auto;
   padding: 8px 28px 12px;
   scrollbar-width: thin;
   scrollbar-color: #e5e5e5 transparent;
@@ -850,6 +852,7 @@ a {
 .chat-body {
   position: relative;
   flex: 1;
+  min-width: 0;
   min-height: 0;
   display: flex;
   flex-direction: column;
@@ -943,6 +946,8 @@ a {
 }
 .column {
   width: min(748px, 100%);
+  max-width: 100%;
+  min-width: 0;
   margin: 0 auto;
 }
 .empty-thread {
@@ -1020,6 +1025,7 @@ a {
   align-items: flex-end;
   gap: 4px;
   max-width: min(525px, 82%);
+  min-width: 0;
   margin: 18px 0 18px auto;
 }
 .user-bubble {
@@ -1255,6 +1261,7 @@ a {
   align-items: center;
   gap: 6px;
   width: 100%;
+  min-width: 0;
   min-height: 24px;
   padding: 0;
   border: 0;
@@ -1288,15 +1295,16 @@ a {
   opacity: 0;
 }
 .official-title:hover .chevron,
-.official-row.open .chevron {
+.official-row.open > .official-title .chevron {
   opacity: 1;
 }
 .official-title:hover .official-leading svg:not(.chevron),
-.official-row.open .official-leading svg:not(.chevron) {
+.official-row.open > .official-title .official-leading svg:not(.chevron) {
   opacity: 0;
 }
 .official-label {
   flex: none;
+  min-width: 0;
 }
 .official-dot {
   width: 2px;
@@ -1344,6 +1352,8 @@ a {
 }
 .diff-card {
   margin: 8px 0 8px 22px;
+  max-width: 100%;
+  min-width: 0;
   background: #f9fafb;
   border-radius: 16px;
   overflow: hidden;
@@ -1393,7 +1403,9 @@ a {
 }
 .diff-body {
   display: grid;
-  grid-template-columns: minmax(max-content, 1fr);
+  grid-template-columns: minmax(0, 1fr);
+  max-width: 100%;
+  min-width: 0;
   padding: 6px 0 16px;
   font: 11px / 19px var(--ds-font-family-code);
   overflow-x: auto;
@@ -1542,9 +1554,16 @@ a {
   border: 0.5px solid rgba(0, 0, 0, 0.04);
   border-radius: var(--dsw-radius-sm);
   padding: 0 5px;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+.markdown img {
+  max-width: 100%;
+  height: auto;
 }
 .table-scroll {
   max-width: 100%;
+  min-width: 0;
   overflow-x: auto;
   margin: 16px 0;
 }
@@ -1579,6 +1598,8 @@ a {
 }
 .code-block {
   margin: 16px 0;
+  max-width: 100%;
+  min-width: 0;
   background: var(--code-bg);
   border-radius: var(--dsw-radius-lg);
   color: var(--ink);
@@ -1623,6 +1644,7 @@ a {
 }
 
 .composer-wrap {
+  min-width: 0;
   padding: 0 28px 10px;
 }
 .card {
@@ -1955,5 +1977,152 @@ a {
   .composer-wrap {
     padding-left: 16px;
     padding-right: 16px;
+  }
+}
+
+/* Contiguous timeline activity; tool details stay user-controlled and folded by default. */
+.activity-status {
+  font-size: 11px;
+  opacity: 0.75;
+  flex-shrink: 0;
+  white-space: normal;
+}
+.tool-activity .official-title {
+  flex-wrap: wrap;
+  align-items: flex-start;
+}
+.tool-activity .official-label {
+  flex: 1;
+  min-width: 0;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+/* Collapse owns height and reduced-motion transitions; nested toggles stay independent. */
+.tool-activity.open > .official-title .chevron,
+.activity-arguments.open > .official-title .chevron {
+  transform: rotate(180deg);
+}
+.activity-arguments > .official-title {
+  font-size: 12px;
+}
+.activity-detail {
+  margin: 6px 0 12px 28px;
+  min-width: 0;
+}
+.activity-detail pre {
+  overflow: visible;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  min-width: 0;
+  max-width: 100%;
+  max-height: none;
+  font-size: 12px;
+  padding: 8px;
+  background: var(--bg-secondary, #8881);
+  border-radius: 6px;
+}
+.activity-command,
+.activity-output,
+.activity-arguments {
+  position: relative;
+  min-width: 0;
+}
+.activity-command .diff-copy,
+.activity-output .diff-copy {
+  float: right;
+  position: relative;
+}
+.activity-facts,
+.activity-note {
+  font-size: 12px;
+  opacity: 0.75;
+  min-width: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.activity-todos {
+  font-size: 13px;
+  padding-left: 20px;
+  overflow-wrap: anywhere;
+}
+.activity-todos span {
+  font-size: 11px;
+  opacity: 0.7;
+}
+/* Wrap only activity diffs; leave Markdown code blocks and tables unchanged. */
+.tool-activity .diff-card {
+  overflow: visible;
+  min-width: 0;
+}
+.tool-activity .diff-body {
+  grid-template-columns: minmax(0, 1fr);
+  overflow: visible;
+  min-width: 0;
+}
+.tool-activity .diff-line {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  min-width: 0;
+}
+.tool-activity[data-state="failed"] > .official-title {
+  color: var(--danger, #c33);
+}
+@media (max-width: 600px) {
+  .activity-status {
+    width: 100%;
+    padding-left: 28px;
+  }
+  .activity-detail {
+    margin-left: 12px;
+  }
+}
+
+/* A single quiet line immediately above the composer, independent of transcript layout. */
+.composer-activity {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  margin: 0 10px 8px;
+  color: #8d8d93;
+  font-size: 13px;
+}
+.composer-activity svg {
+  width: 14px;
+  height: 14px;
+  flex: 0 0 14px;
+}
+.composer-activity-text {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+@supports (background-clip: text) {
+  .composer-activity[data-moving="true"] .composer-activity-text {
+    background: linear-gradient(110deg, #8d8d93 30%, #fafafa 46%, #8d8d93 62%);
+    background-size: 240% 100%;
+    background-clip: text;
+    -webkit-background-clip: text;
+    color: transparent;
+    animation: composer-sweep 2.8s ease-in-out infinite;
+  }
+}
+@keyframes composer-sweep {
+  from {
+    background-position: 180% 0;
+  }
+  to {
+    background-position: -80% 0;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .composer-activity[data-moving="true"] .composer-activity-text {
+    animation: none;
+    background: none;
+    color: #8d8d93;
   }
 }

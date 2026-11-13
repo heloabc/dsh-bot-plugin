@@ -3,7 +3,7 @@
  * Cordis's own Context, and this plugin reads them off the same object.
  *
  * Official types are imported so a host API change fails typecheck. The
- * Context members `connection`, `sessions`, and `sessionQuery` come from the
+ * Context members `connection`, `sessions`, `sessionPersistence`, and `sessionQuery` come from the
  * official packages and are not redeclared here.
  */
 import type {} from '@deepseek-ai/cordis'
@@ -16,7 +16,6 @@ declare module '@deepseek-ai/cordis' {
     profileContext?: { dir?: string }
     webServer?: any
     agents?: any
-    sessionPersistence?: any
     systemPrompt?: any
     tools?: any
     agentPresets?: any

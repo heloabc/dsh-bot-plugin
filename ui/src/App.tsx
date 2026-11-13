@@ -1,10 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { api, readJsonStream } from './api'
+import { api } from './api'
 import { foundations, foundationsError } from './foundations'
 import { useI18n } from './locale'
 import {
   botSignal,
-  chatStatus,
   composerLocked,
   isWorkerSession,
   readLiveBoard,
@@ -17,6 +16,7 @@ import { FilePreview } from './FilePreview'
 import { NewSessionSheet, useSessionBasis } from './NewSession'
 import { BotChatView } from './BotChatView'
 import { TurnRail } from './TurnRail'
+import { CurrentActivity } from './CurrentActivity'
 import { railMarks } from './turn-marks'
 import { botExchange, mainSegments } from './bot-chat'
 import { applyLogEvent, applyEphemeralFrame, previewOf } from './follow'
@@ -1115,6 +1115,8 @@ export function App() {
                 />
               ) : (
                 <Transcript
+                  cwd={items.find(s => s.sessionId === sessionId)?.cwd}
+                  connectionPhase={syncStatus?.phase}
                   segments={conversation}
                   completed={thread.completed}
                   failures={thread.failures}
@@ -1134,13 +1136,6 @@ export function App() {
                   chat={isBotSession}
                 />
               )}
-              {thread.drafting && !botChat && !historyLoading ? (
-                <p className="live-status">
-                  <span className="shimmer">
-                    {isBotSession ? chatStatus(thread.activity, t) : thread.activity || 'Analyzing the request'}
-                  </span>
-                </p>
-              ) : null}
             </div>
           </div>
           {botChat || historyLoading ? null : (
@@ -1159,6 +1154,15 @@ export function App() {
               void send()
             }}
           >
+            {sessionId && !historyLoading ? (
+              <CurrentActivity
+                segments={thread.segments}
+                drafting={thread.drafting}
+                currentTurn={thread.turn}
+                tickets={works}
+                connectionPhase={syncStatus?.phase}
+              />
+            ) : null}
             <div className="card">
               {mentionOpen ? (
                 <div className="mention-menu" role="listbox" aria-label={t('composer.mention')}>

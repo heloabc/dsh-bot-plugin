@@ -118,7 +118,8 @@ async function* generate(options) {
   )
   if (directed) {
     const match = /^FOUNDATIONS_TOOL\s+(\S+)\s+(\{[\s\S]*\})\s*$/.exec(text.trim())
-    const name = match?.[1]?.startsWith('foundations_') ? match[1] : `foundations_${match?.[1] ?? 'recall'}`
+    // Explicit native tools used by the activity API regression; all other directives keep the foundations prefix.
+    const name = ['bash', 'todo_write'].includes(match?.[1]) || match?.[1]?.startsWith('foundations_') ? match[1] : `foundations_${match?.[1] ?? 'recall'}`
     const args = match?.[2] ?? '{}'
     const id = `call_mock_${Date.now()}`
     yield { type: 'block-start', index: 0, blockType: 'tool-call' }
@@ -191,7 +192,7 @@ function nextHostTool(messages) {
     }
   })
   if (index < 0) return null
-  const lines = [...text.matchAll(/^FOUNDATIONS_HOST_TOOL\s+(write|edit)\s+(\{[\s\S]*?\})\s*$/gm)]
+  const lines = [...text.matchAll(/^FOUNDATIONS_HOST_TOOL\s+(write|edit|bash)\s+(\{[\s\S]*?\})\s*$/gm)]
   if (lines.length === 0) return null
   const after = messages.slice(index + 1)
   const done = after.filter(message => message?.role === 'tool').length

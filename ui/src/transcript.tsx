@@ -1,3 +1,4 @@
+import { redactText } from './activity'
 import { Fragment, useState } from 'react'
 import { useI18n } from './locale'
 import { BriefingCard, WorkCard, WorkRefusal } from './WorkCard'
@@ -42,6 +43,8 @@ export function Transcript({
   onOpenInbox,
   botLabel,
   chat = false,
+  cwd,
+  connectionPhase,
 }: {
   segments: Segment[]
   completed: Record<number, number>
@@ -58,6 +61,8 @@ export function Transcript({
   onOpenInbox: () => void
   botLabel: (sessionId: string) => string
   chat?: boolean
+  cwd?: string
+  connectionPhase?: string
 }) {
   const blocks: Array<
     | { type: 'user'; segment: Segment & { kind: 'user' } }
@@ -88,8 +93,13 @@ export function Transcript({
     const turn = Number(key)
     if (!seen.has(turn)) blocks.push({ type: 'turn', turn, seconds: completed[turn], segments: [] })
   }
-  const shown = cardsToShow(tickets)
-  const byId = new Map(tickets.map(ticket => [ticket.id, ticket]))
+  const safeTickets = tickets.map(ticket => ({
+    ...ticket,
+    summary: redactText(ticket.summary),
+    events: ticket.events.map(event => ({ ...event, text: redactText(event.text) })),
+  }))
+  const shown = cardsToShow(safeTickets)
+  const byId = new Map(safeTickets.map(ticket => [ticket.id, ticket]))
   const anchorAt = new Map<string, string>()
   for (const block of blocks) {
     if (block.type !== 'turn') continue
@@ -117,6 +127,8 @@ export function Transcript({
           />
         ) : (
           <TurnBlock
+            cwd={cwd}
+            connectionPhase={connectionPhase}
             key={`turn-${block.turn}-${block.segments[0]?.id ?? 'failed'}`}
             block={block}
             index={index}
@@ -291,6 +303,8 @@ function TurnBlock({
   onOpenSession,
   onOpenFile,
   chat = false,
+  cwd,
+  connectionPhase,
 }: {
   block: { type: 'turn'; turn: number; seconds?: number; segments: Segment[] }
   index: number
@@ -309,6 +323,8 @@ function TurnBlock({
   onOpenSession: (sessionId: string) => void
   onOpenFile: (path: string, line?: number) => void
   chat?: boolean
+  cwd?: string
+  connectionPhase?: string
 }) {
   const { t } = useI18n()
   const pieces = turnPieces(block.segments)
@@ -321,7 +337,11 @@ function TurnBlock({
         {pieces.map(piece => {
           if (piece.type === 'text') {
             return (
-              <div key={piece.segment.id} className={piece.segment.streaming ? 'assistant streaming' : 'assistant'}>
+              <div
+                data-segment={piece.segment.id}
+                key={piece.segment.id}
+                className={piece.segment.streaming ? 'assistant streaming' : 'assistant'}
+              >
                 <MarkdownView text={piece.segment.text} streaming={piece.segment.streaming} onOpenFile={onOpenFile} />
               </div>
             )
@@ -331,11 +351,16 @@ function TurnBlock({
           )
           return (
             <Fragment key={piece.id}>
-              <ActivityGroup segments={piece.segments} quiet={chat} />
+              <ActivityGroup
+                segments={piece.segments}
+                cwd={cwd}
+                tickets={[...byId.values()]}
+                connectionPhase={connectionPhase}
+              />
               {tools
                 .filter(segment => isBudgetRefusal(segment))
                 .map(segment => (
-                  <WorkRefusal key={segment.id} text={budgetRefusalText(segment.result, t)} />
+                  <WorkRefusal key={segment.id} text={redactText(budgetRefusalText(segment.result, t))} />
                 ))}
               {tools.flatMap(segment => {
                 const id = dispatchTicketId(segment)

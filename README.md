@@ -64,6 +64,53 @@ Override in the patch (`config.work`) or with the `DSH_BOT_WORK_BUDGET` environm
 DSH_BOT_WORK_BUDGET='steps=120,wall=45m,mainMaxSteps=10'
 ```
 
+## Worker slots and queue
+
+Each bot may run more than one worker at a time. These four fields are formal budget keys, not source-only constants. They reach the scheduler through the same path as the main-session caps: plugin `config.work`, then `DSH_BOT_WORK_BUDGET` (the launcher `--work-budget`), then the defaults below.
+
+| Field | Default | Max | Meaning |
+| --- | --- | --- | --- |
+| `perBot` / `global` | 2 / 4 | 64 | Running slots: `enqueued`, `started`, or a reserved start. A ticket in `needs_user` does not occupy a slot unless a resume has already reserved one. |
+| `perBotQueue` / `globalQueue` | 8 / 16 | 256 | Accepted tickets waiting for a slot. When both the slot cap and the matching queue cap are full, `foundations_dispatch` returns `BUDGET` and inserts no row. |
+
+`perBot` and `perBotQueue` must be positive integers. Values that are missing, zero, negative, non-integer, infinite, or unknown are ignored and the default is kept — a typo never raises a cap to infinity. Values above the max are clamped to the max and logged. If `perBot` is greater than `global`, the effective running cap for one bot is `min(perBot, global)`. The same rule applies to the queue caps. The configured numbers are kept as written; only admission uses the effective minimum, and startup logs it.
+
+Limits are read when the work runtime is created (process start or plugin load). They are not hot-reloaded into a process that is already running. After a restart with a lower cap, workers that are already running are not cancelled; later `foundations_dispatch` and queue promotion use the new caps.
+
+When a running ticket completes, fails, is cancelled, or parks in `needs_user`, the oldest waiting ticket that still fits the caps starts automatically (global FIFO by `created_at`, then insertion order). First-phase scheduling is not a weighted fair share across bots.
+
+Parked `needs_user` tickets still count toward the combined unfinished cap (`slots + queue`), so they cannot grow without bound or block every new dispatch by filling running slots. Idempotent dispatch of the same owner and key replays the existing ticket.
+
+Workers share the owner's workspace. There is no filesystem isolation; briefings should state file boundaries, or dependent work should stay serial.
+
+Workers use the `foundations-files` preset: official file tools plus official `@deepseek-ai/dsh-tool-bash` and `@deepseek-ai/dsh-tool-jobs`. The host sandbox stays `workspace-write` with the existing approval policy. This does not mount the web preset, add writable roots, or switch the sandbox to `danger-full-access`. A reserved start that does not create a worker within `min(ticket wallMs, 10m)` fails with `reserve-wall` and frees the slot; a late `createChild` is cancelled instead of attached.
+
+Runnable examples (any one of these is enough; `config.work` wins over the environment):
+
+```yaml
+# DSH patch, under the session-foundations plugin
+- insert:
+    - id: session-foundations
+      name: "@thready-web/dsh-bot-plugin"
+      config:
+        work:
+          perBot: 3
+          global: 6
+          perBotQueue: 8
+          globalQueue: 16
+```
+
+```bash
+# Environment the plugin reads directly
+DSH_BOT_WORK_BUDGET='perBot=3,global=6,perBotQueue=8,globalQueue=16'
+
+# Same text through the launcher (also accepts JSON)
+dsh-bot start --work-budget perBot=3,global=6,perBotQueue=8,globalQueue=16
+dsh-bot start --work-budget '{"perBot":1,"global":4}'
+```
+
+`perBot` and `global` are already on the published launcher `--work-budget` allowlist. `perBotQueue` and `globalQueue` need a launcher that includes those keys; until then set the queue caps in `config.work` or `DSH_BOT_WORK_BUDGET` when starting `dsh` without the launcher flag.
+
 ## Session working directory
 
 Workbench sessions start in `THREADY_SESSION_CWD` when set, otherwise in `<DSH_HOME>/workspace` (created on first use), never in `DSH_HOME` itself, which holds the owner token and profiles.
