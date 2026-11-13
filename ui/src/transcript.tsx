@@ -18,6 +18,7 @@ import { parseBotMail } from './bot-message'
 import { turnPieces } from './follow'
 import { MarkdownView } from './MarkdownView'
 import { ActivityGroup } from './ProcessRow'
+import { UserQuestionCard } from './UserQuestionCard'
 import type { RetryAttempt, Segment, TurnFailure } from './types'
 
 function clock(time: number | undefined, locale: string): string {
@@ -345,6 +346,9 @@ function TurnBlock({
                 <MarkdownView text={piece.segment.text} streaming={piece.segment.streaming} onOpenFile={onOpenFile} />
               </div>
             )
+          }
+          if (piece.type === 'question') {
+            return <UserQuestionCard key={piece.segment.id} segment={piece.segment} />
           }
           const tools = piece.segments.filter(
             (segment): segment is Segment & { kind: 'tool' } => segment.kind === 'tool',

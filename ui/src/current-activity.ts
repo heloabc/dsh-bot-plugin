@@ -1,4 +1,5 @@
 import { OPEN_TOOL_STATES, redactText, toolPresentation, type ToolStatus } from './activity.ts'
+import { userQuestionView } from './user-question.ts'
 import { english, type Copy, type MessageKey } from './i18n/index.ts'
 import type { Segment } from './types.ts'
 import type { WorkTicket } from './work.ts'
@@ -51,6 +52,11 @@ export function currentActivity(input: CurrentActivityInput): ActivitySummary | 
   for (const segment of segments) {
     if (segment.kind !== 'tool') continue
     const view = toolPresentation(segment, undefined, tickets)
+    const question = userQuestionView(segment)
+    if (question?.state === 'open' && drafting && inCurrentTurn(segment.turn)) {
+      unresolved.push({ text: t('question.waiting'), moving: true })
+      continue
+    }
     if (view.status === 'worker' && view.ticket) continue // Count the linked worker once below, not once per dispatch call.
     if (view.status === 'worker' && view.ticketId) {
       if (representedTickets.has(view.ticketId)) continue
@@ -78,7 +84,7 @@ export function currentActivity(input: CurrentActivityInput): ActivitySummary | 
       moving: ['accepted', 'enqueued', 'started'].includes(ticket.status),
     })
   }
-  let summary = unresolved.at(-1)
+  let summary = unresolved.find(item => item.text === t('question.waiting')) ?? unresolved.at(-1)
   if (unresolved.length > 1 && summary) {
     summary = {
       text: `${t('activity.pendingCount', { count: String(unresolved.length) })} · ${summary.text}`,

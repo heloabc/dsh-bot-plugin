@@ -276,3 +276,40 @@ test('late results and journal replay clear a pending composer line', () => {
   assert.equal(toolState(replay.segments.find(item => item.kind === 'tool') as ToolSegment), 'succeeded')
   assert.equal(currentActivity({ segments: replay.segments, drafting: false, currentTurn: 1 }), null)
 })
+
+test('composer uses a waiting-for-answer label for an open ask_user_question', () => {
+  const question = tool({
+    name: 'ask_user_question',
+    args: JSON.stringify({
+      questions: [
+        {
+          id: 'confirm_delete',
+          header: '确认删除',
+          question: '确认删除这两个目录吗？',
+          options: [{ label: '取消，先别删' }],
+        },
+      ],
+    }),
+  })
+  assert.equal(
+    currentActivity({ segments: [question], drafting: true, currentTurn: 1 })?.text,
+    'Waiting for your answer',
+  )
+  assert.equal(
+    currentActivity({
+      segments: [question],
+      drafting: true,
+      currentTurn: 1,
+      t: (key, vars) => translate('zh', key, vars),
+    })?.text,
+    '等待你的回答',
+  )
+  assert.equal(
+    currentActivity({
+      segments: [question, tool({ id: 'tool:b', callId: 'b', status: 'waiting' })],
+      drafting: true,
+      currentTurn: 1,
+    })?.text.includes('Waiting for your answer'),
+    true,
+  )
+})

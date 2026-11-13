@@ -148,7 +148,7 @@ test('activity: real shell commands, no-output, failure, background acknowledgem
     const process = state.segments.filter(s => s.kind !== 'user')
     const pieces = turnPieces(process)
     assert.deepEqual(
-      pieces.flatMap(piece => (piece.type === 'text' ? [piece.segment.id] : piece.segments.map(s => s.id))),
+      pieces.flatMap(piece => (piece.type === 'activity' ? piece.segments.map(s => s.id) : [piece.segment.id])),
       process.map(s => s.id),
       'real API journal ordering survives grouping without moving a call across text',
     )

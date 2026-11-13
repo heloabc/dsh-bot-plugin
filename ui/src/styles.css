@@ -813,6 +813,78 @@ a {
   font-size: 13px;
   line-height: 20px;
 }
+
+.user-question-card {
+  margin: 14px 0 18px;
+  padding: 14px 16px;
+  min-width: 0;
+  border: 0.5px solid var(--line);
+  border-radius: 16px;
+  background: var(--code-bg);
+}
+.user-question + .user-question {
+  margin-top: 16px;
+  padding-top: 16px;
+  border-top: 0.5px solid var(--line);
+}
+.user-question-header {
+  margin: 0 0 6px;
+  font-size: 13px;
+  line-height: 20px;
+  font-weight: 600;
+  color: var(--secondary);
+}
+.user-question-text {
+  margin: 0;
+  font-size: 15px;
+  line-height: 24px;
+  font-weight: 600;
+  color: var(--ink);
+  overflow-wrap: anywhere;
+}
+.user-question-hint,
+.user-question-status {
+  margin: 8px 0 0;
+  font-size: 13px;
+  line-height: 20px;
+  color: var(--secondary);
+}
+.user-question-status.exception {
+  color: #9a3412;
+}
+.user-question-options {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 12px 0 0;
+  padding: 0;
+  list-style: none;
+}
+.user-question-option {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  padding: 10px 12px;
+  border: 0.5px solid var(--line);
+  border-radius: 12px;
+  background: white;
+}
+.user-question-option.selected {
+  border-color: var(--ink);
+}
+.user-question-option-label {
+  font-size: 14px;
+  line-height: 22px;
+  color: var(--ink);
+  overflow-wrap: anywhere;
+}
+.user-question-option-desc {
+  font-size: 13px;
+  line-height: 20px;
+  color: var(--secondary);
+  overflow-wrap: anywhere;
+}
 .back {
   display: none;
   border: 0;

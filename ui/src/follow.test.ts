@@ -363,3 +363,21 @@ test('a running batch uses the present-tense heading', () => {
   const heading = processHeading([tool(1, 'write'), tool(2, 'read'), tool(3, 'foundations_report')], true)
   assert.equal(heading, 'Writing files, reading files, calling tools')
 })
+
+test('ask_user_question stays a first-class piece between surrounding activity', () => {
+  const question = tool(4, 'ask_user_question')
+  question.args = JSON.stringify({
+    questions: [{ id: 'confirm_delete', header: '确认删除', question: '删除这两个目录吗？' }],
+  })
+  const pieces = turnPieces([tool(1, 'bash'), think(2, 'check size'), question, tool(5, 'bash')])
+  assert.deepEqual(
+    pieces.map(piece =>
+      piece.type === 'text'
+        ? piece.segment.text
+        : piece.type === 'question'
+          ? piece.segment.name
+          : piece.segments.map(s => s.kind),
+    ),
+    [['tool', 'think'], 'ask_user_question', ['tool']],
+  )
+})

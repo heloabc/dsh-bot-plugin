@@ -3,6 +3,7 @@ import { bot } from './bot.ts'
 import { chrome } from './chrome.ts'
 import { composer } from './composer.ts'
 import { session } from './session.ts'
+import { question } from './question.ts'
 import { work } from './work.ts'
 
 export type Locale = 'en' | 'zh'
@@ -14,6 +15,7 @@ const en = {
   ...bot.en,
   ...work.en,
   ...activity.en,
+  ...question.en,
 } as const
 
 const zh: Record<keyof typeof en, string> = {
@@ -23,6 +25,7 @@ const zh: Record<keyof typeof en, string> = {
   ...bot.zh,
   ...work.zh,
   ...activity.zh,
+  ...question.zh,
 }
 
 export type MessageKey = keyof typeof en

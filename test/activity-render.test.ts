@@ -339,7 +339,11 @@ function assertJournalPositions(state: ThreadState, chat: boolean) {
   const html = renderTranscript!({ ...base, ...state, chat })
   ordered(html, ['data-activity-start="think:1:1:0"', 'ANSWER_A', 'data-activity-start="think:1:2:0"', 'ANSWER_B'])
   return turnPieces(state.segments).map(piece =>
-    piece.type === 'text' ? piece.segment.text : piece.segments.map(s => (s.kind === 'tool' ? s.callId : s.text)),
+    piece.type === 'text'
+      ? piece.segment.text
+      : piece.type === 'question'
+        ? piece.segment.callId
+        : piece.segments.map(s => (s.kind === 'tool' ? s.callId : s.text)),
   )
 }
 
@@ -691,4 +695,75 @@ test('SSR: settled background jobs do not keep Activity or composer pending', ()
   const live = renderCurrent!({ segments: [jobs[2]], drafting: true, currentTurn: 3 })
   assert.ok(live.includes('Background job (last known): Job 3'))
   assert.ok(!live.includes('pending') && live.includes('data-moving="false"'))
+})
+
+test('SSR: ask_user_question renders a visible option card instead of a generic activity row', () => {
+  const question = tool('call_10fxzqal', {
+    name: 'ask_user_question',
+    args: JSON.stringify({
+      questions: [
+        {
+          id: 'confirm_delete',
+          header: '确认删除',
+          question: '确认删除 coffee-landing 和 tea-landing 这两个目录吗？',
+          options: [
+            { label: '直接彻底删除（推荐）', description: '立即删除这两个目录' },
+            { label: '先打个压缩包备份再删' },
+            { label: '先移到回收目录再删' },
+            { label: '取消，先别删' },
+          ],
+        },
+      ],
+    }),
+  })
+  const html = renderTranscript!({
+    ...base,
+    segments: [tool('c1', { args: '{"description":"Inspect dirs","command":"ls"}' }), question],
+  })
+  assert.ok(html.includes('user-question-card'))
+  assert.ok(html.includes('确认删除'))
+  assert.ok(html.includes('确认删除 coffee-landing 和 tea-landing 这两个目录吗？'))
+  for (const label of ['直接彻底删除（推荐）', '先打个压缩包备份再删', '先移到回收目录再删', '取消，先别删']) {
+    assert.ok(html.includes(label), label)
+  }
+  assert.ok(html.includes('立即删除这两个目录'))
+  assert.equal(html.includes('aria-label="Activity"'), true, 'earlier tools stay in an activity group')
+  const cardAt = html.indexOf('user-question-card')
+  const inspectAt = html.indexOf('Inspect dirs')
+  assert.ok(cardAt > inspectAt, 'the question card stays after the preceding tool')
+  assert.ok(!html.includes('Waiting for tool result: ask_user_question'))
+  const current = renderCurrent!({ segments: [question], drafting: true, currentTurn: 1 })
+  assert.ok(current.includes('Waiting for your answer'))
+  assert.ok(!current.includes('Waiting for tool result'))
+})
+
+test('SSR: an aborted ask_user_question card can be rebuilt from the tool result', () => {
+  const html = renderTranscript!({
+    ...base,
+    segments: [
+      tool('call_10fxzqal', {
+        name: 'ask_user_question',
+        running: false,
+        resultReceived: true,
+        error: true,
+        errorCode: 'ASK_ABORTED',
+        status: 'cancelled',
+        result: 'Error: ask_user_question was aborted before the user answered',
+        args: JSON.stringify({
+          questions: [
+            {
+              id: 'confirm_delete',
+              header: '确认删除',
+              question: '确认删除这两个目录吗？',
+              options: [{ label: '取消，先别删' }],
+            },
+          ],
+        }),
+      }),
+    ],
+  })
+  assert.ok(html.includes('确认删除这两个目录吗？'))
+  assert.ok(html.includes('取消，先别删'))
+  assert.ok(html.includes('This question was cancelled before you answered.'))
+  assert.ok(!html.includes('ask_user_question'))
 })

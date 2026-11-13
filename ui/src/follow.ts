@@ -1,6 +1,7 @@
 import { resultStatus, toolState, ACTIVE_TOOL_STATES, statusLabel, redactText } from './activity.ts'
 import { parseBotMail } from './bot-message.ts'
 import { isTicketNotice, parseBriefing } from './work.ts'
+import { isUserQuestionTool } from './user-question.ts'
 import {
   type LiveBlock,
   type RetryAttempt,
@@ -281,6 +282,7 @@ export type ActivitySegment = Extract<Segment, { kind: 'think' | 'tool' }>
 export type TurnPiece =
   | { type: 'text'; segment: Extract<Segment, { kind: 'assistant' }> }
   | { type: 'activity'; id: string; segments: ActivitySegment[] }
+  | { type: 'question'; segment: Extract<Segment, { kind: 'tool' }> }
 
 /** Keep each assistant sentence where it was emitted, and bundle only the activity between sentences. */
 export function turnPieces(segments: readonly Segment[]): TurnPiece[] {
@@ -296,6 +298,9 @@ export function turnPieces(segments: readonly Segment[]): TurnPiece[] {
     if (segment.kind === 'assistant') {
       flush()
       pieces.push({ type: 'text', segment })
+    } else if (segment.kind === 'tool' && isUserQuestionTool(segment.name)) {
+      flush()
+      pieces.push({ type: 'question', segment })
     } else if (segment.kind === 'think' || segment.kind === 'tool') {
       activity.push(segment)
     }
