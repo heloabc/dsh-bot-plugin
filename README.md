@@ -115,6 +115,11 @@ dsh-bot start --work-budget '{"perBot":1,"global":4}'
 
 Workbench sessions start in `THREADY_SESSION_CWD` when set, otherwise in `<DSH_HOME>/workspace` (created on first use), never in `DSH_HOME` itself, which holds the owner token and profiles.
 
+Generated raster previews can be embedded at `/dsh-bot/<project>/preview/<image>` or `/dsh-bot/<project>/artifacts/<image>`. These are deliberate artifact directories under that configured workspace, not a general file server or a per-session sharing boundary: authenticated workbench users can view their images. Only JPEG, PNG, GIF and WebP with matching signatures are served, with private/no-store caching. Dotfiles, traversal, symlink escapes, other workspace locations and active HTML/SVG are rejected. With no configured workspace this fallback is disabled. Relative Markdown image paths resolve under `/dsh-bot/`; existing absolute URLs remain unchanged.
+
+Actions folds keep their initial view until the user toggles them. Streaming updates, new actions, live-to-durable event replacement and completion do not automatically open or close an existing fold. Text and question boundaries still separate action groups in transcript order.
+
+
 DSH loads `dist/`. Rebuild after changing `src/`. Until `npm --prefix ui run build` has run, `/dsh-bot/` is 404.
 
 Host integration needs Node `>= 24.9` and `DSH_BIN`:

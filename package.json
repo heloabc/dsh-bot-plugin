@@ -49,6 +49,7 @@
     "@deepseek-ai/dsh-session-query": "^0.2.2-rc.1",
     "@types/node": "^24.10.0",
     "esbuild": "^0.25.0",
+    "linkedom": "^0.18.15",
     "typescript": "^5.9.3"
   },
   "dsh": {

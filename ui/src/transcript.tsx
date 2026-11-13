@@ -141,7 +141,7 @@ export function Transcript({
             sessionId={sessionId}
             cwd={cwd}
             connectionPhase={connectionPhase}
-            key={`turn-${block.turn}-${block.segments[0]?.id ?? 'failed'}`}
+            key={`${sessionId}:turn-${block.turn}`}
             block={block}
             index={index}
             blocks={blocks}

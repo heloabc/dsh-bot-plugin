@@ -2,6 +2,7 @@ import { createReadStream, statSync } from 'node:fs'
 import { dirname, extname, join, resolve, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { createDesk, defaultSessionCwd, type DeskRequest } from './desk.ts'
+import { serveWorkspaceImage } from './workspace-image.ts'
 import type { HostContext } from './host.ts'
 import { toolError, type ToolPayload } from './errors.ts'
 import { permissionView, setPermission } from './permissions.ts'
@@ -86,6 +87,7 @@ export function registerHttp(
     }
     if (rawPath === '/dsh-bot' || (rawPath.startsWith('/dsh-bot/') && !rawPath.startsWith('/dsh-bot/api'))) {
       if (serveDesk(req, res, rawPath)) return
+      if (serveWorkspaceImage(req, res, rawPath, defaultSessionCwd(process.env, { mkdir: false }))) return
       return send(res, 404, { ok: false, code: 'NOT_FOUND' })
     }
     const path = rawPath.startsWith('/dsh-bot/api')
@@ -730,6 +732,8 @@ const DESK_TYPES = new Map([
   ['.svg', 'image/svg+xml'],
   ['.json', 'application/json; charset=utf-8'],
   ['.map', 'application/json; charset=utf-8'],
+  ['.jpg', 'image/jpeg'],
+  ['.jpeg', 'image/jpeg'],
   ['.png', 'image/png'],
   ['.webp', 'image/webp'],
   ['.woff2', 'font/woff2'],

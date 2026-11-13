@@ -288,10 +288,15 @@ export type TurnPiece =
 export function turnPieces(segments: readonly Segment[]): TurnPiece[] {
   const pieces: TurnPiece[] = []
   let activity: ActivitySegment[] = []
+  let activityIndex = 0
   const flush = () => {
-    const first = activity[0]
-    if (!first) return
-    pieces.push({ type: 'activity', id: first.id, segments: activity })
+    if (activity.length === 0) return
+    // A run keeps its identity when live block ids become durable event ids.
+    pieces.push({
+      type: 'activity',
+      id: `activity:${activityIndex++}`,
+      segments: activity,
+    })
     activity = []
   }
   for (const segment of segments) {

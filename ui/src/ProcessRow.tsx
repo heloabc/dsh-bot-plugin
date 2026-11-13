@@ -57,8 +57,8 @@ export function ActivityGroup({
     .filter(([, count]) => Number(count) > 0)
     .map(([label, count]) => `${label} ${count}`)
     .join(' · ')
-  const [expanded, setExpanded] = useState<boolean | null>(null)
-  const open = expanded ?? active
+  // Running state chooses only the initial view; later events never toggle it.
+  const [open, setOpen] = useState(() => active)
   const stale = connectionPhase != null && connectionPhase !== 'live'
   return (
     <section
@@ -67,7 +67,7 @@ export function ActivityGroup({
       data-state={active ? 'running' : 'settled'}
       data-activity-start={segments[0]?.id}
     >
-      <button type="button" className="official-title" aria-expanded={open} onClick={() => setExpanded(!open)}>
+      <button type="button" className="official-title" aria-expanded={open} onClick={() => setOpen(value => !value)}>
         <span className="official-leading">
           <ToolIcon />
           <Chevron />

@@ -68,6 +68,17 @@ function fileTarget(href: string | undefined): { path: string; line?: number } |
 function markdownComponents(streaming: boolean, onOpenFile?: (path: string, line?: number) => void): Components {
   return {
     pre: Pre,
+    img({ src, alt, title }) {
+      const local = typeof src === 'string' && src !== '' && !/^(?:[a-z][a-z0-9+.-]*:|\/|#|\?)/i.test(src)
+      return (
+        <img
+          src={local ? `/dsh-bot/${src.replace(/^\.\//, '')}` : src || undefined}
+          alt={alt}
+          title={title}
+          loading="lazy"
+        />
+      )
+    },
     code({ className, children }) {
       return <code className={className}>{children}</code>
     },
