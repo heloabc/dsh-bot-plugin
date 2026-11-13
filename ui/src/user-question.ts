@@ -1,5 +1,5 @@
 /** Present official ask_user_question calls as a transcript card, not a generic tool row. */
-import { argsOf, redactText } from './activity.ts'
+import { argsOf } from './activity.ts'
 import type { ToolSegment } from './types.ts'
 
 export const USER_QUESTION_TOOL = 'ask_user_question'
@@ -33,8 +33,8 @@ export type UserQuestionView = {
   questions: UserQuestionItem[]
 }
 
-function textField(value: unknown): string {
-  return typeof value === 'string' ? redactText(value.trim()) : ''
+function rawString(value: unknown): string {
+  return typeof value === 'string' ? value : ''
 }
 
 function parseOptions(value: unknown): UserQuestionOption[] {
@@ -42,9 +42,8 @@ function parseOptions(value: unknown): UserQuestionOption[] {
   return value.flatMap(item => {
     if (!item || typeof item !== 'object') return []
     const row = item as Record<string, unknown>
-    const label = textField(row.label)
-    if (!label) return []
-    return [{ label, description: textField(row.description) }]
+    if (typeof row.label !== 'string') return []
+    return [{ label: row.label, description: rawString(row.description) }]
   })
 }
 
@@ -53,13 +52,14 @@ function parseQuestions(value: unknown): Array<Omit<UserQuestionItem, 'selected'
   return value.flatMap((item, index) => {
     if (!item || typeof item !== 'object') return []
     const row = item as Record<string, unknown>
-    const question = textField(row.question)
+    const question = rawString(row.question)
     if (!question) return []
+    const id = rawString(row.id)
     return [
       {
-        id: textField(row.id) || `question-${index + 1}`,
+        id: id === '' ? `question-${index + 1}` : id,
         question,
-        header: textField(row.header),
+        header: rawString(row.header),
         options: parseOptions(row.options),
         multiSelect: row.multi_select === true || row.multiSelect === true,
       },
@@ -74,12 +74,12 @@ function parseAnswers(raw: string): Map<string, { selected: string[]; custom: st
   for (const item of answers) {
     if (!item || typeof item !== 'object') continue
     const row = item as Record<string, unknown>
-    const id = textField(row.id)
+    const id = rawString(row.id)
     if (!id) continue
     const selected = Array.isArray(row.selected)
-      ? row.selected.flatMap(value => (typeof value === 'string' && value.trim() ? [redactText(value.trim())] : []))
+      ? row.selected.flatMap(value => (typeof value === 'string' ? [value] : []))
       : []
-    map.set(id, { selected, custom: textField(row.custom) })
+    map.set(id, { selected, custom: rawString(row.custom) })
   }
   return map
 }

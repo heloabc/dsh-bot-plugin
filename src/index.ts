@@ -8,6 +8,7 @@ import { createTriggers } from './triggers.ts'
 import { followupDurable, liveAgent, logHasMessage, removePending } from './inbox.ts'
 import { createLogSource } from './log/source.ts'
 import { toolError } from './errors.ts'
+import { createQuestionAnswerer, publishQuestionAnswerer, questionAnswererFor } from './questions.ts'
 import { publishRuntime, publishWorkRuntime, runtimeFor } from './runtime-registry.ts'
 import { type HostContext, type PluginHost } from './host.ts'
 import {
@@ -42,6 +43,7 @@ export const inject = [
   'agentPresets',
   'sessionPersistence',
   'sessionQuery',
+  'userQuestions',
 ]
 
 /**
@@ -273,6 +275,13 @@ export function apply(ctx: PluginHost, config: FoundationsConfig = {}) {
     triggers?.tick().catch(() => {})
     work?.tick().catch(() => {})
   }
+
+  const questions = createQuestionAnswerer()
+  publishQuestionAnswerer(store.root, questions)
+  ctx.effect(() => questions.listen(ctx))
+  ctx.effect(() => () => {
+    if (questionAnswererFor(store.root) === questions) publishQuestionAnswerer(store.root, null)
+  })
 
   ctx.logger?.info?.(
     'session-foundations: ready dir=%s bindings=%s promoted=%s',

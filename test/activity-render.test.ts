@@ -718,9 +718,12 @@ test('SSR: ask_user_question renders a visible option card instead of a generic 
   })
   const html = renderTranscript!({
     ...base,
+    sessionId: 'sess-bot',
     segments: [tool('c1', { args: '{"description":"Inspect dirs","command":"ls"}' }), question],
   })
   assert.ok(html.includes('user-question-card'))
+  assert.ok(html.includes('data-session="sess-bot"'))
+  assert.ok(html.includes('type="button"'))
   assert.ok(html.includes('确认删除'))
   assert.ok(html.includes('确认删除 coffee-landing 和 tea-landing 这两个目录吗？'))
   for (const label of ['直接彻底删除（推荐）', '先打个压缩包备份再删', '先移到回收目录再删', '取消，先别删']) {

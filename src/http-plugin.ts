@@ -4,6 +4,7 @@ import { openStore } from './store.ts'
 import { createEngine } from './engine.ts'
 import { registerHttp } from './http.ts'
 import type { HostContext } from './host.ts'
+import { questionAnswererFor } from './questions.ts'
 import { runtimeFor, workRuntimeFor } from './runtime-registry.ts'
 
 export const name = 'session-foundations-http'
@@ -42,5 +43,6 @@ export function apply(
     () => runtimeFor(key) ?? runtimeFor(dataDir),
     () => workRuntimeFor(key) ?? workRuntimeFor(dataDir),
     dataDir,
+    () => questionAnswererFor(key) ?? questionAnswererFor(dataDir),
   )
 }

@@ -23,6 +23,7 @@ export function registerHttp(
   getRuntime: () => ReturnType<typeof import('./triggers.ts').createTriggers> | null = () => null,
   getWork: () => ReturnType<typeof import('./work-worker.ts').createWorkRuntime> | null = () => null,
   dataDir = '',
+  getQuestions: () => import('./questions.ts').QuestionAnswerer | null = () => null,
 ) {
   const webServer = ctx.webServer
   const storeDir = dataDir || (ctx.profileContext?.dir ? join(ctx.profileContext.dir, 'session-foundations') : '')
@@ -101,6 +102,38 @@ export function registerHttp(
       if (req.method === 'GET' && path === '/session-foundations/api/sessions/bots') {
         const bots = engine.listBots()
         return send(res, 200, { ok: true, sessionIds: bots.map(bot => bot.sessionId), bots })
+      }
+      if (req.method === 'POST' && path === '/session-foundations/api/questions/answer') {
+        const questions = getQuestions()
+        if (!questions)
+          return send(
+            res,
+            503,
+            toolError('UNAVAILABLE', 'The user-questions answerer is not attached to this host yet.'),
+          )
+        const body = await readJson(req)
+        if (typeof body.sessionId !== 'string' || body.sessionId === '') {
+          return send(res, 400, toolError('VALIDATION', 'sessionId is required.'))
+        }
+        const result = questions.submit({
+          sessionId: body.sessionId,
+          callId: typeof body.callId === 'string' ? body.callId : undefined,
+          answers: body.answers,
+        })
+        if (result.ok === false) {
+          const status =
+            result.code === 'NOT_FOUND'
+              ? 404
+              : result.code === 'CONFLICT'
+                ? 409
+                : result.code === 'FORBIDDEN'
+                  ? 403
+                  : result.code === 'UNAVAILABLE'
+                    ? 503
+                    : 400
+          return send(res, status, result)
+        }
+        return send(res, 200, result)
       }
       if (req.method === 'POST' && path === '/session-foundations/api/sessions/open') {
         const body = await readJson(req)

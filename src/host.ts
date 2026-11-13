@@ -43,8 +43,13 @@ export interface HostContext {
   systemPrompt?: any
   tools?: any
   agentPresets?: any
+  userQuestions?: { answer(agent: unknown, callId: string, answer: unknown): boolean }
   logger?: { info?(...args: any[]): void; warn?(...args: any[]): void }
-  on?(event: string, listener: (...args: any[]) => any, options?: { global?: boolean }): any
+  on?(
+    event: string,
+    listener: (...args: any[]) => any,
+    options?: boolean | { global?: boolean; prepend?: boolean },
+  ): any
   get?(name: string): any
   agentDefaultModel?: { currentSelection?(): any }
 }
@@ -54,7 +59,7 @@ export interface PluginHost extends HostContext {
   effect(execute: () => void | (() => void)): void
   systemPrompt: any
   tools: any
-  on(event: string, listener: (...args: any[]) => any, options?: { global?: boolean }): any
+  on(event: string, listener: (...args: any[]) => any, options?: boolean | { global?: boolean; prepend?: boolean }): any
 }
 
 export type { OfficialSessionStore }

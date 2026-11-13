@@ -1115,6 +1115,7 @@ export function App() {
                 />
               ) : (
                 <Transcript
+                  sessionId={sessionId}
                   cwd={items.find(s => s.sessionId === sessionId)?.cwd}
                   connectionPhase={syncStatus?.phase}
                   segments={conversation}

@@ -110,3 +110,28 @@ test('userQuestionView returns null for other tools and keeps an incomplete stre
   assert.equal(streaming?.title, 'ask_user_question')
   assert.equal(streaming?.questions.length, 0)
 })
+
+test('userQuestionView keeps official option labels and ids unredacted for submission', () => {
+  const view = userQuestionView(
+    tool({
+      args: JSON.stringify({
+        questions: [
+          {
+            id: 'api_key',
+            question: 'Which credential should we use?',
+            options: [{ label: 'sk-live-1234567890abcdef', description: 'token=secret' }],
+          },
+        ],
+      }),
+      result: JSON.stringify({
+        answers: [{ id: 'api_key', selected: ['sk-live-1234567890abcdef'] }],
+      }),
+      running: false,
+      resultReceived: true,
+      status: 'succeeded',
+    }),
+  )
+  assert.equal(view?.questions[0]?.id, 'api_key')
+  assert.equal(view?.questions[0]?.options[0]?.label, 'sk-live-1234567890abcdef')
+  assert.deepEqual(view?.questions[0]?.selected, ['sk-live-1234567890abcdef'])
+})

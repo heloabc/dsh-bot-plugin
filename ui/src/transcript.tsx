@@ -29,6 +29,7 @@ function clock(time: number | undefined, locale: string): string {
 }
 
 export function Transcript({
+  sessionId,
   segments,
   completed,
   failures,
@@ -47,6 +48,7 @@ export function Transcript({
   cwd,
   connectionPhase,
 }: {
+  sessionId?: string
   segments: Segment[]
   completed: Record<number, number>
   failures: Record<number, TurnFailure>
@@ -128,6 +130,7 @@ export function Transcript({
           />
         ) : (
           <TurnBlock
+            sessionId={sessionId}
             cwd={cwd}
             connectionPhase={connectionPhase}
             key={`turn-${block.turn}-${block.segments[0]?.id ?? 'failed'}`}
@@ -287,6 +290,7 @@ function TurnFailurePanel({
 }
 
 function TurnBlock({
+  sessionId,
   block,
   index,
   blocks,
@@ -307,6 +311,7 @@ function TurnBlock({
   cwd,
   connectionPhase,
 }: {
+  sessionId?: string
   block: { type: 'turn'; turn: number; seconds?: number; segments: Segment[] }
   index: number
   blocks: Array<{ type: string; segment?: Segment & { kind: 'user' }; turn?: number }>
@@ -348,7 +353,7 @@ function TurnBlock({
             )
           }
           if (piece.type === 'question') {
-            return <UserQuestionCard key={piece.segment.id} segment={piece.segment} />
+            return <UserQuestionCard key={piece.segment.id} segment={piece.segment} sessionId={sessionId} />
           }
           const tools = piece.segments.filter(
             (segment): segment is Segment & { kind: 'tool' } => segment.kind === 'tool',
