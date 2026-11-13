@@ -73,6 +73,8 @@ type WorkHostOptions = {
   /** Called once per main-session budget trip so the host can tell the user. */
   onMainBudget?: (sessionId: string, trip: MainBudgetTrip) => void
   snapshot?: (sessionId: string) => Promise<Array<Record<string, any>>> | Array<Record<string, any>>
+  /** True when this process still holds a live child handle. */
+  childPresent?: (sessionId: string) => Promise<boolean> | boolean
   resident?: boolean
   pid?: number
   now?: () => Date
@@ -702,15 +704,115 @@ export function createWorkRuntime(
   async function tick() {
     await reconcileInputs(book, deps)
     await reconcileNotices(book, deps)
-    await store.write('work', () => {
-      book.expireQuiet()
-    })
+    await renewLiveLeases()
+    const expired = await store.write('work', () => book.expireQuiet())
+    await stopExpiredChildren(expired)
     for (const owner of book.ownerIds()) {
       if (engine.isBot(owner)) await admit(owner)
     }
     for (const child of book.childIds()) await reconcileChild(child)
     for (const owner of book.ownerIds()) await reconcileOwner(owner)
     await promoteQueued()
+  }
+
+  /**
+   * Renew the lease of a started worker that is still alive, so a silent
+   * model or tool turn longer than leaseMs does not false-expire it.
+   */
+  async function renewLiveLeases() {
+    const renewals: string[] = []
+    for (const child of book.childIds()) {
+      const attempt = book.attemptForChild(child)
+      if (!attempt || (attempt.status !== 'started' && attempt.status !== 'enqueued')) continue
+      if (!(await isChildLive(child))) continue
+      renewals.push(attempt.id)
+    }
+    if (renewals.length === 0) return
+    await store.write('work', () => {
+      const until = new Date(now().getTime() + limits.leaseMs).toISOString()
+      for (const id of renewals) {
+        const attempt = book.attempt(id)
+        if (!attempt || (attempt.status !== 'started' && attempt.status !== 'enqueued')) continue
+        book.touchLease(id, until, typeof attempt.lease_observed_seq === 'number' ? attempt.lease_observed_seq : null)
+      }
+    })
+  }
+
+  /**
+   * @param {string} sessionId
+   */
+  async function isChildLive(sessionId: string) {
+    if (options.childPresent) {
+      try {
+        if (!(await options.childPresent(sessionId))) return false
+      } catch {
+        return false
+      }
+    } else if (!options.snapshot) {
+      return false
+    }
+    if (!options.snapshot) return true
+    try {
+      const events = await options.snapshot(sessionId)
+      return !latestTurnEnded(events)
+    } catch {
+      return false
+    }
+  }
+
+  /**
+   * @param {Array<{ ticketId: string, reason: string, childSessionId?: string | null }>} expired
+   */
+  async function stopExpiredChildren(
+    expired: Array<{ ticketId: string; reason: string; childSessionId?: string | null }>,
+  ) {
+    if (!Array.isArray(expired) || expired.length === 0) return
+    for (const item of expired) {
+      const child = item.childSessionId
+      if (!child || !options.cancel) continue
+      const state = arms.get(child)
+      if (state) {
+        state.closing = true
+        state.clear?.()
+      }
+      try {
+        await options.cancel(child, { keepInbox: false, reason: `worker-expire:${item.reason}` })
+      } catch {
+        /* best-effort stop; the ledger already failed the ticket */
+      }
+    }
+  }
+
+  /**
+   * @param {Record<string, any>} event
+   */
+  function eventText(event: Record<string, any>) {
+    if (typeof event.text === 'string' && event.text !== '') return event.text
+    return book.detail(event.ticket_id)?.events?.find(item => item.event_id === event.event_id)?.text ?? ''
+  }
+
+  /**
+   * @param {Record<string, any>} event
+   */
+  function isExtensionAsk(event: Record<string, any>) {
+    return event.kind === 'progress' && eventText(event).startsWith('[foundations:extension]')
+  }
+
+  /**
+   * Extension asks are decision-required: they may starve-bypass notice-open,
+   * user-pending, and delivery-open. Ordinary progress does not.
+   * @param {Record<string, any>} event
+   */
+  function isDecisionRequiredEvent(event: Record<string, any>) {
+    return event.kind === 'question' || event.kind === 'result' || event.kind === 'failure' || isExtensionAsk(event)
+  }
+
+  /**
+   * @param {Record<string, any>} ticket
+   */
+  function isFinishedTicket(ticket: Record<string, any>) {
+    const status = String(ticket.status)
+    return status === 'failed' || status === 'cancelled' || status === 'delivered'
   }
 
   /**
@@ -727,10 +829,7 @@ export function createWorkRuntime(
     }
     const terminalTimes = []
     for (const event of wake.events) {
-      if (
-        (event.kind === 'question' || event.kind === 'result' || event.kind === 'failure') &&
-        event.apply_status === 'applied'
-      ) {
+      if (event.apply_status === 'applied' && isDecisionRequiredEvent(event)) {
         terminalTimes.push(Date.parse(event.created_at))
       }
     }
@@ -755,6 +854,8 @@ export function createWorkRuntime(
     for (const event of wake.events) {
       const ticket = book.ticket(event.ticket_id)
       if (!ticket) continue
+      // A grant cannot revive a finished ticket, so drop a stale extension ask.
+      if (isExtensionAsk(event) && isFinishedTicket(ticket)) continue
       items.push({
         ticketId: ticket.id,
         eventId: event.event_id,
@@ -787,6 +888,7 @@ export function createWorkRuntime(
     const head = `${ticket.id} ${status} (${LABEL[status] ?? status}) rev ${ticket.briefing_revision} ${event.kind}`
     const text = book.detail(ticket.id)?.events?.find(item => item.event_id === event.event_id)?.text ?? ''
     if (text.startsWith('[foundations:extension]')) {
+      if (isFinishedTicket(ticket)) return head
       return [head, `eventId: ${event.event_id}`, text].join('\n')
     }
     if (event.kind !== 'result' && event.kind !== 'failure') return head
@@ -1536,6 +1638,28 @@ export function createWorkRuntime(
     state.clear?.()
     arms.delete(sessionId)
   }
+}
+
+/**
+ * A later turn/end for every started turn means the child is idle.
+ * No turn at all, or an open turn, means it may still be running.
+ * @param {Array<Record<string, any>>} events
+ */
+function latestTurnEnded(events: Array<Record<string, any>>) {
+  const open = new Set()
+  let sawTurn = false
+  for (const event of events) {
+    const turn = event.data?.turn
+    if (turn == null) continue
+    if (event.type === 'turn/start' || event.type === 'user/message') {
+      sawTurn = true
+      open.add(turn)
+    } else if (event.type === 'turn/end') {
+      sawTurn = true
+      open.delete(turn)
+    }
+  }
+  return sawTurn && open.size === 0
 }
 
 /**

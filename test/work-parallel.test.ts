@@ -30,6 +30,7 @@ function boot(budget?: Partial<typeof DEFAULT_WORK_BUDGET>) {
     pendingIds: sessionId => world.pendingIds(sessionId),
     cancel: (sessionId, options) => world.cancel(sessionId, options),
     snapshot: sessionId => world.snapshot(sessionId),
+    childPresent: sessionId => world.hasSession(sessionId),
     now: () => new Date(clock.ms),
     pid: 42,
     schedule: (fn, _ms) => {
@@ -289,6 +290,7 @@ test('lease expiry of a running ticket starts the next queued ticket on tick', a
   const second = await ctx.work.dispatch('bot-a', { briefing: 'next up', idempotencyKey: 'next' })
   assert.equal(second.queued, true)
   ctx.work.observeSession(first.childSessionId, ctx.world.seeUser(first.childSessionId, first.nativeMessageId, 1))
+  ctx.world.dropChild(first.childSessionId)
   ctx.store.db
     .prepare(`UPDATE work_attempts SET lease_until = ? WHERE id = ?`)
     .run('2026-11-07T00:00:00.000Z', first.attemptId)

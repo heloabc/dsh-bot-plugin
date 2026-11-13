@@ -458,6 +458,7 @@ function startWork(
         return []
       }
     },
+    childPresent: sessionId => liveAgent(ctx, sessionId) != null,
   })
   publishWorkRuntime(store.root, work)
   ctx.effect(() => () => {

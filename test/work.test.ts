@@ -31,6 +31,7 @@ function boot(budget?: Partial<typeof DEFAULT_WORK_BUDGET>) {
     pendingIds: sessionId => world.pendingIds(sessionId),
     cancel: (sessionId, options) => world.cancel(sessionId, options),
     snapshot: sessionId => world.snapshot(sessionId),
+    childPresent: sessionId => world.hasSession(sessionId),
     now: () => new Date(clock.ms),
     pid: 42,
     schedule: (fn, ms) => {
@@ -773,12 +774,20 @@ test('lease expiry and enqueue wall fail the attempt and do not start another', 
   const result = await dispatched(ctx, 'will expire', 'lease')
   const seen = ctx.world.seeUser(result.childSessionId, result.nativeMessageId, 1)
   ctx.work.observeSession(result.childSessionId, seen)
+  ctx.world.dropChild(result.childSessionId)
   ctx.store.db
     .prepare(`UPDATE work_attempts SET lease_until = ? WHERE id = ?`)
     .run('2026-11-07T00:00:00.000Z', result.attemptId)
   await ctx.work.tick()
   assert.equal(ctx.work.detail(result.ticketId)!.ticket.status, 'failed')
   assert.equal(ctx.work.detail(result.ticketId)!.attempts.length, 1)
+  assert.equal(
+    ctx.world.cancels.some(
+      call =>
+        call.sessionId === result.childSessionId && call.reason === 'worker-expire:lease' && call.keepInbox === false,
+    ),
+    true,
+  )
 
   const other = boot()
   const queued = await dispatched(other, 'never started', 'wall')
@@ -905,4 +914,366 @@ test('durable follow-up dies after five failed attempts', async () => {
   assert.equal(result.status, 'dead')
   assert.equal(status, 'dead')
   assert.equal(attempts, 5)
+})
+
+// Local t161u investigation: characterize the existing behavior before live logs
+// establish which path was taken. These tests invoke only the in-process mock.
+test('investigation: a full wall grant fails at the ceiling without asking or restarting', async () => {
+  const ctx = boot()
+  try {
+    const job = await ctx.work.dispatch('bot-a', {
+      briefing: 'inspect budget behavior',
+      idempotencyKey: 'wall-ceiling-investigation',
+      budget: { wallMs: DEFAULT_WORK_BUDGET.workerWallMs, maxTokens: 10_000 },
+    })
+    ctx.work.observeSession(job.childSessionId, ctx.world.seeUser(job.childSessionId, job.nativeMessageId, 1))
+    ctx.work.observeSession(job.childSessionId, { type: 'turn/start', data: { turn: 1 } })
+    ctx.clock.ms += DEFAULT_WORK_BUDGET.workerWallMs
+    ctx.scheduled()!.fn()
+    const detail = ctx.work.detail(job.ticketId)!
+    assert.equal(detail.ticket.status, 'failed')
+    assert.equal(detail.attempts.length, 1)
+    assert.equal(
+      detail.events.some((e: any) => e.text?.includes('[foundations:extension]')),
+      false,
+    )
+    assert.equal(ctx.world.cancels.at(-1)?.reason, 'worker-budget:wall')
+    const granted = await ctx.work.grant('bot-a', { ticketId: job.ticketId, wallMs: 60_000 })
+    assert.equal(granted.code, 'VALIDATION')
+    for (let i = 0; i < 3; i++) await ctx.work.tick()
+    assert.equal(ctx.work.detail(job.ticketId)!.attempts.length, 1)
+    assert.equal(ctx.world.calls.length, 1)
+    assert.equal(ctx.store.db.prepare('SELECT count(*) AS n FROM work_tickets').get().n, 1)
+
+    // A fresh dispatch, not budget failure/tick alone, can repeat the same work.
+    const second = await ctx.work.dispatch('bot-a', {
+      briefing: 'inspect budget behavior',
+      idempotencyKey: 'fresh-dispatch-investigation',
+    })
+    assert.notEqual(second.ticketId, job.ticketId)
+    assert.equal(ctx.world.calls.length, 2)
+  } finally {
+    ctx.close()
+  }
+})
+
+test('investigation: one usage message can jump over the soft quota straight into hard failure', async () => {
+  const ctx = boot()
+  try {
+    const job = await ctx.work.dispatch('bot-a', {
+      briefing: 'inspect token overshoot',
+      budget: { wallMs: 120_000, maxTokens: 5_000 },
+    })
+    ctx.work.observeSession(job.childSessionId, { type: 'turn/start', data: { turn: 1 } })
+    ctx.work.observeSession(job.childSessionId, {
+      type: 'assistant/message',
+      seq: 10,
+      data: { usage: { totalTokens: DEFAULT_WORK_BUDGET.workerMaxTokens } },
+    })
+    const detail = ctx.work.detail(job.ticketId)!
+    assert.equal(detail.ticket.status, 'failed')
+    assert.equal(
+      detail.events.some((e: any) => e.text?.includes('[foundations:extension]')),
+      false,
+    )
+    assert.equal(ctx.world.cancels.at(-1)?.reason, 'worker-budget:tokens')
+  } finally {
+    ctx.close()
+  }
+})
+
+test('investigation: grant retains the same attempt and sums usage without resetting it', async () => {
+  const ctx = boot()
+  try {
+    const job = await ctx.work.dispatch('bot-a', {
+      briefing: 'inspect in-place grant',
+      budget: { wallMs: 120_000, maxTokens: 5_000 },
+    })
+    ctx.work.observeSession(job.childSessionId, ctx.world.seeUser(job.childSessionId, job.nativeMessageId, 1))
+    ctx.work.observeSession(job.childSessionId, { type: 'turn/start', data: { turn: 1 } })
+    const usage = (seq: number, totalTokens: number) =>
+      ctx.work.observeSession(job.childSessionId, {
+        type: 'assistant/message',
+        seq,
+        data: { usage: { inputTokens: totalTokens - 100, outputTokens: 100, totalTokens } },
+      })
+    usage(10, 3_000)
+    usage(11, 3_000)
+    const before = ctx.work.detail(job.ticketId)!
+    assert.match(before.events.at(-1).text, /tokens used: 6000/)
+    const pushes = ctx.world.pushes.length
+    const creates = ctx.world.calls.length
+    const granted = await ctx.work.grant('bot-a', { ticketId: job.ticketId, maxTokens: 10_000 })
+    assert.equal(granted.maxTokens, 15_000)
+    const after = ctx.work.detail(job.ticketId)!
+    assert.equal(after.ticket.status, 'started')
+    assert.equal(after.ticket.active_attempt_id, before.ticket.active_attempt_id)
+    assert.equal(after.ticket.child_session_id, job.childSessionId)
+    assert.equal(after.attempts.length, 1)
+    assert.equal(ctx.world.calls.length, creates)
+    assert.equal(ctx.world.pushes.length, pushes)
+    assert.equal(ctx.world.cancels.length, 0)
+    usage(12, 9_000)
+    const asks = ctx.work.detail(job.ticketId)!.events.filter((e: any) => e.text?.includes('[foundations:extension]'))
+    assert.equal(asks.length, 2)
+    assert.match(asks.at(-1)!.text, /tokens used: 15000/)
+  } finally {
+    ctx.close()
+  }
+})
+
+test('investigation: extension progress waits behind user input only until starvation time', async () => {
+  const ctx = boot()
+  try {
+    const job = await ctx.work.dispatch('bot-a', {
+      briefing: 'inspect extension admission',
+      budget: { wallMs: 120_000, maxTokens: 5_000 },
+    })
+    ctx.work.observeSession(job.childSessionId, ctx.world.seeUser(job.childSessionId, job.nativeMessageId, 1))
+    ctx.work.observeSession(job.childSessionId, { type: 'turn/start', data: { turn: 1 } })
+    ctx.work.observeSession(job.childSessionId, {
+      type: 'assistant/message',
+      seq: 10,
+      data: { usage: { totalTokens: 5_000 } },
+    })
+    ctx.world.postUser('bot-a', 'ordinary queued user input')
+    const held = await ctx.work.admit('bot-a')
+    assert.equal(held.admitted, false)
+    assert.equal(held.reason, 'user-pending')
+    ctx.clock.ms += DEFAULT_WORK_BUDGET.starveMs + 1
+    const admitted = await ctx.work.admit('bot-a')
+    assert.equal(admitted.admitted, true)
+    assert.equal(admitted.reason, 'starve')
+    assert.equal(ctx.work.detail(job.ticketId)!.ticket.status, 'started')
+    assert.equal(ctx.work.detail(job.ticketId)!.notices.length, 1)
+    assert.match(present(ctx.world.pushes.at(-1)).text, /foundations_grant/)
+    assert.doesNotMatch(present(ctx.world.pushes.at(-1)).text, /failed \(failed\)/)
+    // A soft quota does not pause the worker while main has not received it.
+    ctx.work.observeSession(job.childSessionId, {
+      type: 'assistant/message',
+      seq: 11,
+      data: { usage: { totalTokens: DEFAULT_WORK_BUDGET.workerMaxTokens } },
+    })
+    assert.equal(ctx.work.detail(job.ticketId)!.ticket.status, 'failed')
+  } finally {
+    ctx.close()
+  }
+})
+
+test('investigation: grant after worker turn end changes budget but does not wake the worker', async () => {
+  const ctx = boot()
+  try {
+    const job = await ctx.work.dispatch('bot-a', {
+      briefing: 'inspect idle grant',
+      budget: { wallMs: 120_000, maxTokens: 5_000 },
+    })
+    ctx.world.claim(job.childSessionId)
+    ctx.work.observeSession(job.childSessionId, ctx.world.seeUser(job.childSessionId, job.nativeMessageId, 1))
+    ctx.work.observeSession(job.childSessionId, { type: 'turn/start', data: { turn: 1 } })
+    ctx.work.observeSession(job.childSessionId, {
+      type: 'assistant/message',
+      seq: 10,
+      data: { usage: { totalTokens: 5_000 } },
+    })
+    ctx.work.observeSession(job.childSessionId, ctx.world.endTurn(job.childSessionId, 1, 'completed'))
+    const pushes = ctx.world.pushes.length
+    const granted = await ctx.work.grant('bot-a', { ticketId: job.ticketId, maxTokens: 10_000 })
+    assert.equal(granted.ok, true)
+    assert.equal(ctx.world.pushes.length, pushes)
+    assert.deepEqual(ctx.world.pendingIds(job.childSessionId), [])
+    assert.equal(ctx.work.detail(job.ticketId)!.ticket.status, 'started')
+    assert.equal(ctx.work.detail(job.ticketId)!.attempts.length, 1)
+  } finally {
+    ctx.close()
+  }
+})
+
+test('an extension-only wake is admitted by starve even when a notice or user is pending', async () => {
+  const ctx = boot()
+  try {
+    const prior = await ctx.work.dispatch('bot-a', {
+      briefing: 'ordinary progress first',
+      idempotencyKey: 'ordinary-progress',
+    })
+    ctx.work.observeSession(prior.childSessionId, ctx.world.seeUser(prior.childSessionId, prior.nativeMessageId, 1))
+    await ctx.work.report(prior.childSessionId, { kind: 'progress', text: 'still working' })
+    await ctx.work.tick()
+    assert.equal(ctx.work.detail(prior.ticketId)!.notices.length, 1)
+    assert.equal(ctx.world.pendingIds('bot-a').length, 1)
+
+    const job = await ctx.work.dispatch('bot-a', {
+      briefing: 'needs a grant',
+      idempotencyKey: 'extension-starve',
+      budget: { wallMs: 120_000, maxTokens: 5_000 },
+    })
+    ctx.work.observeSession(job.childSessionId, ctx.world.seeUser(job.childSessionId, job.nativeMessageId, 1))
+    ctx.work.observeSession(job.childSessionId, { type: 'turn/start', data: { turn: 1 } })
+    ctx.work.observeSession(job.childSessionId, {
+      type: 'assistant/message',
+      seq: 10,
+      data: { usage: { totalTokens: 5_000 } },
+    })
+    ctx.world.postUser('bot-a', 'user is still talking')
+    const before = await ctx.work.admit('bot-a')
+    assert.equal(before.admitted, false)
+    assert.ok(before.reason === 'user-pending' || before.reason === 'notice-open')
+    assert.equal(ctx.work.detail(job.ticketId)!.notices.length, 0)
+    ctx.clock.ms += DEFAULT_WORK_BUDGET.starveMs + 1
+    const admitted = await ctx.work.admit('bot-a')
+    assert.equal(admitted.admitted, true)
+    assert.equal(admitted.reason, 'starve')
+    assert.equal(ctx.work.detail(job.ticketId)!.ticket.status, 'started')
+    assert.equal(ctx.work.detail(job.ticketId)!.notices.length, 1)
+    assert.match(present(ctx.world.pushes.at(-1)).text, /\[foundations:extension\]/)
+    assert.match(present(ctx.world.pushes.at(-1)).text, /foundations_grant/)
+    assert.doesNotMatch(present(ctx.world.pushes.at(-1)).text, /failed \(failed\)/)
+  } finally {
+    ctx.close()
+  }
+})
+
+test('ordinary progress does not starve-bypass a pending user message', async () => {
+  const ctx = boot()
+  try {
+    const job = await dispatched(ctx, 'ordinary progress only', 'ordinary-starve')
+    ctx.work.observeSession(job.childSessionId, ctx.world.seeUser(job.childSessionId, job.nativeMessageId, 1))
+    await ctx.work.report(job.childSessionId, { kind: 'progress', text: 'halfway there' })
+    ctx.world.postUser('bot-a', 'hear me first')
+    ctx.clock.ms += DEFAULT_WORK_BUDGET.starveMs + 1
+    const admitted = await ctx.work.admit('bot-a')
+    assert.equal(admitted.admitted, false)
+    assert.equal(admitted.reason, 'user-pending')
+    assert.equal(ctx.work.detail(job.ticketId)!.notices.length, 0)
+    assert.equal(ctx.work.detail(job.ticketId)!.ticket.status, 'started')
+  } finally {
+    ctx.close()
+  }
+})
+
+test('an extension and a later failure are not delivered as one contradictory grant notice', async () => {
+  const ctx = boot()
+  try {
+    const job = await ctx.work.dispatch('bot-a', {
+      briefing: 'grant then fail',
+      idempotencyKey: 'extension-then-fail',
+      budget: { wallMs: 120_000, maxTokens: 5_000 },
+    })
+    ctx.work.observeSession(job.childSessionId, ctx.world.seeUser(job.childSessionId, job.nativeMessageId, 1))
+    ctx.work.observeSession(job.childSessionId, { type: 'turn/start', data: { turn: 1 } })
+    ctx.work.observeSession(job.childSessionId, {
+      type: 'assistant/message',
+      seq: 10,
+      data: { usage: { totalTokens: 5_000 } },
+    })
+    assert.equal(ctx.work.detail(job.ticketId)!.ticket.status, 'started')
+    ctx.world.postUser('bot-a', 'hold the notice')
+    ctx.clock.ms += DEFAULT_WORK_BUDGET.starveMs + 1
+    const granted = await ctx.work.admit('bot-a')
+    assert.equal(granted.admitted, true)
+    assert.equal(ctx.work.detail(job.ticketId)!.ticket.status, 'started')
+    assert.match(present(ctx.world.pushes.at(-1)).text, /foundations_grant/)
+    assert.doesNotMatch(present(ctx.world.pushes.at(-1)).text, /failed \(failed\)/)
+
+    const other = boot()
+    const late = await other.work.dispatch('bot-a', {
+      briefing: 'fail before the grant arrives',
+      idempotencyKey: 'fail-before-grant',
+      budget: { wallMs: 120_000, maxTokens: 5_000 },
+    })
+    other.work.observeSession(late.childSessionId, other.world.seeUser(late.childSessionId, late.nativeMessageId, 1))
+    other.work.observeSession(late.childSessionId, { type: 'turn/start', data: { turn: 1 } })
+    other.work.observeSession(late.childSessionId, {
+      type: 'assistant/message',
+      seq: 10,
+      data: { usage: { totalTokens: 5_000 } },
+    })
+    other.world.postUser('bot-a', 'hold the notice')
+    other.clock.ms += 60_000
+    other.work.observeSession(late.childSessionId, {
+      type: 'assistant/message',
+      seq: 11,
+      data: { usage: { totalTokens: DEFAULT_WORK_BUDGET.workerMaxTokens } },
+    })
+    assert.equal(other.work.detail(late.ticketId)!.ticket.status, 'failed')
+    const delivered = await other.work.admit('bot-a')
+    assert.equal(delivered.admitted, true)
+    const notice = present(other.world.pushes.at(-1)).text
+    assert.match(notice, /failed \(failed\)/)
+    assert.doesNotMatch(notice, /Do not mark the ticket failed/)
+    assert.doesNotMatch(notice, /Call foundations_grant/)
+    other.close()
+  } finally {
+    ctx.close()
+  }
+})
+
+test('an open extension request is not lease-expired by expireQuiet', async () => {
+  const ctx = boot()
+  try {
+    const job = await ctx.work.dispatch('bot-a', {
+      briefing: 'wait for a grant',
+      idempotencyKey: 'extension-holds-lease',
+      budget: { wallMs: 120_000, maxTokens: 5_000 },
+    })
+    ctx.work.observeSession(job.childSessionId, ctx.world.seeUser(job.childSessionId, job.nativeMessageId, 1))
+    ctx.work.observeSession(job.childSessionId, { type: 'turn/start', data: { turn: 1 } })
+    ctx.work.observeSession(job.childSessionId, {
+      type: 'assistant/message',
+      seq: 10,
+      data: { usage: { totalTokens: 5_000 } },
+    })
+    assert.equal(JSON.parse(ctx.work.detail(job.ticketId)!.ticket.budget_json).extension, 'open')
+    // Drop the child so lease renewal cannot mask the expireQuiet guard.
+    ctx.world.dropChild(job.childSessionId)
+    ctx.store.db
+      .prepare(`UPDATE work_attempts SET lease_until = ? WHERE id = ?`)
+      .run('2026-11-07T00:00:00.000Z', job.attemptId)
+    const cancels = ctx.world.cancels.length
+    await ctx.work.tick()
+    assert.equal(ctx.work.detail(job.ticketId)!.ticket.status, 'started')
+    assert.equal(JSON.parse(ctx.work.detail(job.ticketId)!.ticket.budget_json).extension, 'open')
+    assert.equal(ctx.work.detail(job.ticketId)!.attempts.length, 1)
+    assert.equal(ctx.world.cancels.length, cancels)
+  } finally {
+    ctx.close()
+  }
+})
+
+test('a live child without turn/end renews its lease across a gap longer than leaseMs', async () => {
+  const ctx = boot()
+  try {
+    const job = await dispatched(ctx, 'long silent turn', 'live-lease-renew')
+    ctx.work.observeSession(job.childSessionId, ctx.world.seeUser(job.childSessionId, job.nativeMessageId, 1))
+    const before = ctx.store.db.prepare('SELECT lease_until FROM work_attempts WHERE id = ?').get(job.attemptId)
+    ctx.clock.ms += DEFAULT_WORK_BUDGET.leaseMs + 5_000
+    await ctx.work.tick()
+    assert.equal(ctx.work.detail(job.ticketId)!.ticket.status, 'started')
+    const after = ctx.store.db.prepare('SELECT lease_until FROM work_attempts WHERE id = ?').get(job.attemptId)
+    assert.ok(Date.parse(after.lease_until) > Date.parse(before.lease_until))
+    assert.ok(Date.parse(after.lease_until) > ctx.clock.ms)
+    assert.equal(
+      ctx.world.cancels.some(call => call.sessionId === job.childSessionId),
+      false,
+    )
+  } finally {
+    ctx.close()
+  }
+})
+
+test('a dead child can still lease-expire and is cancelled', async () => {
+  const ctx = boot()
+  try {
+    const job = await dispatched(ctx, 'child already gone', 'dead-lease')
+    ctx.work.observeSession(job.childSessionId, ctx.world.seeUser(job.childSessionId, job.nativeMessageId, 1))
+    ctx.world.dropChild(job.childSessionId)
+    ctx.clock.ms += DEFAULT_WORK_BUDGET.leaseMs + 1
+    await ctx.work.tick()
+    assert.equal(ctx.work.detail(job.ticketId)!.ticket.status, 'failed')
+    assert.equal(ctx.work.detail(job.ticketId)!.attempts.length, 1)
+    const stopped = ctx.world.cancels.find(call => call.sessionId === job.childSessionId)
+    assert.equal(stopped?.reason, 'worker-expire:lease')
+    assert.equal(stopped?.keepInbox, false)
+  } finally {
+    ctx.close()
+  }
 })

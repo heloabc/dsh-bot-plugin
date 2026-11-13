@@ -831,11 +831,20 @@ export function createTicketBook(db: SqlDatabase, root: string, now: () => Date 
     return row('SELECT * FROM work_tickets WHERE id = ?', ticketId)
   }
 
+  function extensionIsOpen(budgetJson: string) {
+    try {
+      return JSON.parse(budgetJson ?? '')?.extension === 'open'
+    } catch {
+      return false
+    }
+  }
+
   function expireQuiet() {
     const failed = []
     const running = db
       .prepare(`
-      SELECT t.id AS ticket_id, t.budget_json, t.status AS ticket_status, a.id AS attempt_id, a.status AS attempt_status,
+      SELECT t.id AS ticket_id, t.budget_json, t.status AS ticket_status, t.child_session_id,
+             a.id AS attempt_id, a.status AS attempt_status,
              a.lease_until, a.current_input_id
       FROM work_tickets t
       JOIN work_attempts a ON a.id = t.active_attempt_id
@@ -849,8 +858,10 @@ export function createTicketBook(db: SqlDatabase, root: string, now: () => Date 
         item.lease_until &&
         Date.parse(item.lease_until) <= now().getTime()
       ) {
+        // The host already asked main to grant, not to mark the ticket failed.
+        if (extensionIsOpen(item.budget_json)) continue
         failRunning(item.ticket_id, 'lease')
-        failed.push(item.ticket_id)
+        failed.push({ ticketId: item.ticket_id, reason: 'lease', childSessionId: item.child_session_id ?? null })
         continue
       }
       if (item.ticket_status === 'enqueued' && item.attempt_status === 'enqueued' && item.current_input_id) {
@@ -863,13 +874,17 @@ export function createTicketBook(db: SqlDatabase, root: string, now: () => Date 
         }
         if (input && input.flush_status === 'accepted' && Date.parse(input.updated_at) + wall <= now().getTime()) {
           failRunning(item.ticket_id, 'enqueue-wall')
-          failed.push(item.ticket_id)
+          failed.push({
+            ticketId: item.ticket_id,
+            reason: 'enqueue-wall',
+            childSessionId: item.child_session_id ?? null,
+          })
         }
       }
     }
     const reserved = db
       .prepare(`
-      SELECT t.id AS ticket_id, t.budget_json, t.updated_at
+      SELECT t.id AS ticket_id, t.budget_json, t.updated_at, t.child_session_id
       FROM work_tickets t
       WHERE t.status IN ('accepted','needs_user')
         AND json_extract(t.budget_json, '$.slot') = 'held'
@@ -886,7 +901,11 @@ export function createTicketBook(db: SqlDatabase, root: string, now: () => Date 
       }
       if (Date.parse(item.updated_at) + wall <= now().getTime()) {
         failRunning(item.ticket_id, 'reserve-wall')
-        failed.push(item.ticket_id)
+        failed.push({
+          ticketId: item.ticket_id,
+          reason: 'reserve-wall',
+          childSessionId: item.child_session_id ?? null,
+        })
       }
     }
     return failed

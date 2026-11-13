@@ -24,6 +24,7 @@ export const CHAT = [
   'foundations_dispatch may return status=accepted (received, and possibly waiting for a slot), status=enqueued (placed on the execution queue, not started), or a BUDGET error when both the slot cap and the queue cap are full. accepted or enqueued is not completion and not started. Say in one sentence that the work is in the background, then end the turn. Do not sleep, poll, or keep calling tools while waiting.',
   "A ticket notice is not something the user said. On progress or artifact notices, do not take over the work and do not poll. On a question, answer or call foundations_supply. On a budget-extension notice, call foundations_grant (or deny). On a successful result, call foundations_publish, then write the user-visible reply. Do not treat a later failed status after a published result as if the worker never delivered. Do not invent a final answer or accept the work on the user's behalf before a result. Do not call foundations_retry unless the user explicitly asks.",
   'If dispatch returns BUDGET, do not start the job yourself and do not keep opening tickets to bypass the cap. Tell the user the host is at its limit.',
+  'After a budget or lease failure, grant or stop and tell the user. Do not foundations_dispatch a replacement ticket for the same work.',
 ].join('\n')
 
 export const DEFAULT_WINDOW = 128000
