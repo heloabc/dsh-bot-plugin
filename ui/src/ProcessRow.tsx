@@ -255,14 +255,16 @@ export function ToolCallRowView({
               <span className="official-label">{t('activity.fullArgs')}</span>
             </>
           }
+          trailing={argsOpen ? <CopyButton text={view.args} /> : null}
         >
-          <CopyButton text={view.args} />
           <pre>{view.args || '{}'}</pre>
         </ActivityDisclosure>
         {segment.resultReceived || segment.result ? (
           <div className="activity-output">
-            <strong>{t('activity.toolResult')}</strong>
-            <CopyButton text={view.output} />
+            <div className="activity-block-head">
+              <span>{t('activity.toolResult')}</span>
+              <CopyButton text={view.output} />
+            </div>
             <pre>{view.output || t('activity.emptyResult')}</pre>
           </div>
         ) : null}
@@ -280,6 +282,7 @@ export function ActivityDisclosure({
   onToggle,
   panelId,
   title,
+  trailing,
   children,
 }: {
   className: string
@@ -289,6 +292,7 @@ export function ActivityDisclosure({
   onToggle: () => void
   panelId: string
   title: ReactNode
+  trailing?: ReactNode
   children?: ReactNode
 }) {
   return (
@@ -305,7 +309,8 @@ export function ActivityDisclosure({
       >
         {title}
       </button>
-      <div id={panelId}>
+      {trailing}
+      <div id={panelId} className="activity-panel">
         <Collapse open={open}>{children}</Collapse>
       </div>
     </div>

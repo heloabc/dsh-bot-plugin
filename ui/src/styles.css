@@ -1288,6 +1288,7 @@ a {
 .official-leading svg {
   position: absolute;
   inset: 0;
+  margin: auto;
   width: 14px;
   height: 14px;
 }
@@ -2002,8 +2003,39 @@ a {
 .activity-arguments.open > .official-title .chevron {
   transform: rotate(180deg);
 }
+.activity-arguments {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  column-gap: 4px;
+}
 .activity-arguments > .official-title {
+  grid-column: 1;
+  grid-row: 1;
+  min-width: 0;
+  min-height: 24px;
   font-size: 12px;
+  line-height: 16px;
+  align-items: center;
+}
+.activity-arguments > .diff-copy {
+  grid-column: 2;
+  grid-row: 1;
+}
+.activity-arguments > .activity-panel {
+  grid-column: 1 / -1;
+  min-width: 0;
+}
+.activity-block-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: 24px;
+  color: var(--tertiary);
+  font-size: 12px;
+  line-height: 16px;
+  font-weight: 500;
 }
 .activity-detail {
   margin: 6px 0 12px 28px;
@@ -2028,8 +2060,7 @@ a {
   position: relative;
   min-width: 0;
 }
-.activity-command .diff-copy,
-.activity-output .diff-copy {
+.activity-command .diff-copy {
   float: right;
   position: relative;
 }
