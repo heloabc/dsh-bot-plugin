@@ -41,6 +41,28 @@ function boot(budget?: Partial<typeof DEFAULT_WORK_BUDGET>) {
   return { dir, store, engine, world, work, clock, close: () => store.close() }
 }
 
+/**
+ * Assert `work` finishes without waiting on a blocked createChild.
+ * Wall-clock bounds are flaky under a full `npm test` load.
+ */
+async function assertUnblocked<T>(work: Promise<T>, blocked: Promise<unknown>, label: string): Promise<T> {
+  let blockedWon = false
+  const blockWatch = blocked.then(() => {
+    blockedWon = true
+    return 'blocked' as const
+  })
+  const outcome = await Promise.race([
+    work.then(value => ({ ok: 'work' as const, value })),
+    blockWatch.then(() => ({ ok: 'blocked' as const, value: undefined as unknown as T })),
+    new Promise<{ ok: 'timeout'; value: undefined }>(resolve => {
+      setTimeout(() => resolve({ ok: 'timeout', value: undefined }), 5000)
+    }),
+  ])
+  assert.equal(outcome.ok, 'work', `${label} (${outcome.ok})`)
+  assert.equal(blockedWon, false, label)
+  return (outcome as { ok: 'work'; value: T }).value
+}
+
 function running(ctx: any, ticketId: string) {
   const detail = ctx.work.detail(ticketId)
   const ticket = detail!.ticket
@@ -380,11 +402,12 @@ test('cancel and grant-deny return without waiting for a slow createChild of the
   firstId = first.ticketId
   const second = await work.dispatch('bot-a', { briefing: 'waiting', idempotencyKey: 'wait' })
   assert.equal(second.queued, true)
-  const started = Date.now()
-  const cancelled = await work.cancelTicket('bot-a', { ticketId: first.ticketId })
-  const elapsed = Date.now() - started
+  const cancelled = await assertUnblocked(
+    work.cancelTicket('bot-a', { ticketId: first.ticketId }),
+    blocked,
+    'cancel waited for the next createChild',
+  )
   assert.equal(cancelled.ok, true)
-  assert.equal(elapsed < 200, true, `cancel waited ${elapsed}ms for the next createChild`)
   releaseNext()
   await work.promoteQueued()
   assert.equal(work.detail(second.ticketId!)!.ticket.status, 'enqueued')
@@ -424,9 +447,7 @@ test('a hung reserved start expires, frees the slot, and a late createChild is c
   const second = await work.dispatch('bot-a', { briefing: 'next in line', idempotencyKey: 'next' })
   assert.equal(second.queued, true)
   ctx.clock.ms += RESERVE_WALL_MS + 1
-  const ticked = Date.now()
-  await work.tick()
-  assert.equal(Date.now() - ticked < 200, true, 'tick waited for the hung createChild')
+  await assertUnblocked(work.tick(), hung, 'tick waited for the hung createChild')
   assert.equal(work.detail(firstId)!.ticket.status, 'failed')
   const events = work.detail(firstId)!.events
   assert.equal(
@@ -503,12 +524,13 @@ test('grant-deny returns without waiting for a slow createChild of the next tick
   firstId = first.ticketId
   const second = await work.dispatch('bot-a', { briefing: 'next after deny', idempotencyKey: 'grant-wait' })
   assert.equal(second.queued, true)
-  const started = Date.now()
-  const denied = await work.grant('bot-a', { ticketId: first.ticketId, deny: true })
-  const elapsed = Date.now() - started
+  const denied = await assertUnblocked(
+    work.grant('bot-a', { ticketId: first.ticketId, deny: true }),
+    blocked,
+    'grant-deny waited for the next createChild',
+  )
   assert.equal(denied.ok, true)
   assert.equal(denied.denied, true)
-  assert.equal(elapsed < 200, true, `grant-deny waited ${elapsed}ms for the next createChild`)
   releaseNext()
   await work.promoteQueued()
   assert.equal(work.detail(first.ticketId)!.ticket.status, 'failed')
