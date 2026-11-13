@@ -1280,17 +1280,17 @@ a {
   color: var(--secondary);
 }
 .official-leading {
-  position: relative;
+  display: grid;
+  place-items: center;
   width: 16px;
-  height: 16px;
+  height: 24px;
   flex: none;
 }
 .official-leading svg {
-  position: absolute;
-  inset: 0;
-  margin: auto;
+  grid-area: 1 / 1;
   width: 14px;
   height: 14px;
+  transform-origin: center;
 }
 .official-leading .chevron {
   opacity: 0;
@@ -1306,6 +1306,7 @@ a {
 .official-label {
   flex: none;
   min-width: 0;
+  line-height: inherit;
 }
 .official-dot {
   width: 2px;
@@ -1984,6 +1985,7 @@ a {
 /* Contiguous timeline activity; tool details stay user-controlled and folded by default. */
 .activity-status {
   font-size: 11px;
+  line-height: 24px;
   opacity: 0.75;
   flex-shrink: 0;
   white-space: normal;
@@ -2015,8 +2017,8 @@ a {
   min-width: 0;
   min-height: 24px;
   font-size: 12px;
-  line-height: 16px;
-  align-items: center;
+  line-height: 24px;
+  align-items: flex-start;
 }
 .activity-arguments > .diff-copy {
   grid-column: 2;
@@ -2034,7 +2036,7 @@ a {
   min-height: 24px;
   color: var(--tertiary);
   font-size: 12px;
-  line-height: 16px;
+  line-height: 24px;
   font-weight: 500;
 }
 .activity-detail {
