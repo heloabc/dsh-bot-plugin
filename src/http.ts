@@ -76,6 +76,21 @@ export function registerHttp(
       bots: { ok: true, sessionIds: bots.map(bot => bot.sessionId), bots },
     }
   }
+  // Compact reads do not enumerate the static authorization provider catalog.
+  function interactionSnapshot(sessionId: string, compact: boolean) {
+    return {
+      ok: true,
+      sessionId,
+      questions: sessionId || !compact ? (getQuestions()?.snapshot(sessionId || undefined) ?? []) : [],
+      approvals: sessionId || !compact ? (getApprovals()?.snapshot(sessionId || undefined) ?? []) : [],
+      authorization: getAuthorization()?.snapshot({ catalog: !compact }) ?? {
+        available: false,
+        ...(compact ? { catalogRevision: 0, inFlight: [] } : { entries: [] }),
+        notices: [],
+        prompts: [],
+      },
+    }
+  }
   const handler = async (req: import('node:http').IncomingMessage, res: import('node:http').ServerResponse) => {
     const rejection = reject(ctx, req)
     if (rejection) return send(res, rejection, { ok: false, code: 'FORBIDDEN' })
@@ -199,12 +214,7 @@ export function registerHttp(
       }
       if (req.method === 'GET' && path === '/session-foundations/api/interactions') {
         const sessionId = url.searchParams.get('sessionId') ?? ''
-        return send(res, 200, {
-          ok: true,
-          questions: getQuestions()?.snapshot(sessionId || undefined) ?? [],
-          approvals: getApprovals()?.snapshot(sessionId || undefined) ?? [],
-          authorization: getAuthorization()?.snapshot() ?? { available: false, entries: [], notices: [], prompts: [] },
-        })
+        return send(res, 200, interactionSnapshot(sessionId, url.searchParams.get('compact') === '1'))
       }
       if (req.method === 'POST' && path === '/session-foundations/api/approvals/answer') {
         const approvals = getApprovals()
@@ -422,6 +432,7 @@ export function registerHttp(
           workStamp: () => work.liveStamp(),
           workBoard: () => work.liveBoardAll(),
           loadDesk: () => loadPageDesk(req),
+          interactions: () => interactionSnapshot(url.searchParams.get('sessionId') ?? '', true),
         })
       }
       if (req.method === 'GET' && path === '/session-foundations/api/work/live') {

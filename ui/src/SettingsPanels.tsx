@@ -1,7 +1,8 @@
-import { useEffect, useState, type ReactNode } from 'react'
+import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import { api } from './api.ts'
 import { useI18n } from './locale'
+import { createAuthorizationCatalog } from './interaction-sync'
 import { presetDisplayName } from './permission-label.ts'
 
 type PermissionOption = { value: string; name: string; description?: string }
@@ -182,7 +183,15 @@ type AuthEntry = {
 
 type AuthNotice = { message: string; url?: string; code?: string }
 
-export function AuthorizationPanel({ onClose }: { onClose: () => void }) {
+export function AuthorizationPanel({
+  onClose,
+  authorization,
+  catalog,
+}: {
+  onClose: () => void
+  authorization?: Record<string, unknown>
+  catalog?: ReturnType<typeof createAuthorizationCatalog>
+}) {
   const { t } = useI18n()
   const [available, setAvailable] = useState(true)
   const [entries, setEntries] = useState<AuthEntry[]>([])
@@ -192,19 +201,61 @@ export function AuthorizationPanel({ onClose }: { onClose: () => void }) {
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
 
-  async function refresh() {
-    const response = await api('/authorization')
-    setAvailable(response.body.available !== false)
-    setEntries(Array.isArray(response.body.entries) ? (response.body.entries as AuthEntry[]) : [])
-    setNotices(Array.isArray(response.body.notices) ? (response.body.notices as AuthNotice[]) : [])
-    setPrompts(Array.isArray(response.body.prompts) ? (response.body.prompts as AuthPrompt[]) : [])
+  const [localCatalog] = useState(() =>
+    createAuthorizationCatalog(async () => {
+      const response = await api('/authorization')
+      if (response.status !== 200) throw new Error('Authorization catalog unavailable')
+      return response.body
+    }),
+  )
+  const directory = catalog ?? localCatalog
+  const mounted = useRef(true)
+  const generation = useRef(0)
+  async function refresh(invalidate = false) {
+    if (document.hidden) return
+    if (invalidate) directory.invalidate()
+    const request = ++generation.current
+    try {
+      const body = await directory.get()
+      if (!mounted.current || request !== generation.current) return
+      setAvailable(body.available !== false)
+      setEntries(Array.isArray(body.entries) ? (body.entries as AuthEntry[]) : [])
+      if (!authorization) {
+        setNotices(Array.isArray(body.notices) ? (body.notices as AuthNotice[]) : [])
+        setPrompts(Array.isArray(body.prompts) ? (body.prompts as AuthPrompt[]) : [])
+      }
+    } catch {
+      if (mounted.current && request === generation.current) setError(t('auth.failed'))
+    }
   }
-
   useEffect(() => {
+    if (!authorization) return
+    setAvailable(authorization.available !== false)
+    if (
+      (Array.isArray(authorization.prompts) && authorization.prompts.length > 0) ||
+      (Array.isArray(authorization.inFlight) && authorization.inFlight.length > 0)
+    )
+      setBusy(false)
+    setNotices(Array.isArray(authorization.notices) ? (authorization.notices as AuthNotice[]) : [])
+    setPrompts(Array.isArray(authorization.prompts) ? (authorization.prompts as AuthPrompt[]) : [])
+  }, [authorization])
+  useEffect(() => {
+    mounted.current = true
     void refresh()
-    const id = window.setInterval(() => void refresh(), 1500)
-    return () => window.clearInterval(id)
-  }, [])
+    // Native catalog registration has no reliable change hook. Revalidate only
+    // while the drawer is visible, and on resume/flow changes (not every token).
+    const resume = () => {
+      if (!document.hidden) void refresh(true)
+    }
+    const id = window.setInterval(() => void refresh(), 30_000)
+    document.addEventListener('visibilitychange', resume)
+    return () => {
+      mounted.current = false
+      generation.current++
+      window.clearInterval(id)
+      document.removeEventListener('visibilitychange', resume)
+    }
+  }, [directory, authorization?.catalogRevision])
 
   async function begin(entry: AuthEntry, method?: string) {
     setBusy(true)
@@ -218,7 +269,7 @@ export function AuthorizationPanel({ onClose }: { onClose: () => void }) {
       if (response.status !== 200 || response.body.ok === false) {
         setError(typeof response.body.message === 'string' ? response.body.message : t('auth.failed'))
       }
-      await refresh()
+      await refresh(true)
     } catch {
       setError(t('auth.failed'))
     } finally {
@@ -242,7 +293,7 @@ export function AuthorizationPanel({ onClose }: { onClose: () => void }) {
       if (response.status !== 200 || response.body.ok === false) {
         setError(typeof response.body.message === 'string' ? response.body.message : t('auth.failed'))
       }
-      await refresh()
+      await refresh(true)
     } catch {
       setError(t('auth.failed'))
     } finally {
@@ -258,7 +309,7 @@ export function AuthorizationPanel({ onClose }: { onClose: () => void }) {
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ key: entry.key }),
       })
-      await refresh()
+      await refresh(true)
     } finally {
       setBusy(false)
     }
@@ -353,29 +404,38 @@ export function AuthorizationPanel({ onClose }: { onClose: () => void }) {
           </div>
         </article>
       ))}
-      {entries.map(entry => (
-        <article key={JSON.stringify(entry.key)} className="user-question">
-          <p className="user-question-text">{entry.label}</p>
-          <div className="user-question-row">
-            {entry.methods.map(method => (
-              <button
-                key={method.id}
-                type="button"
-                className="user-question-submit"
-                disabled={busy || entry.inFlight}
-                onClick={() => void begin(entry, method.id)}
-              >
-                {method.label || t('auth.start')}
-              </button>
-            ))}
-            {entry.inFlight ? (
-              <button type="button" className="user-question-skip" disabled={busy} onClick={() => void cancel(entry)}>
-                {t('auth.cancel')}
-              </button>
-            ) : null}
-          </div>
-        </article>
-      ))}
+      {entries.map(original => {
+        const entry = {
+          ...original,
+          inFlight:
+            original.inFlight ||
+            (Array.isArray(authorization?.inFlight) &&
+              authorization.inFlight.some(key => JSON.stringify(key) === JSON.stringify(original.key))),
+        }
+        return (
+          <article key={JSON.stringify(entry.key)} className="user-question">
+            <p className="user-question-text">{entry.label}</p>
+            <div className="user-question-row">
+              {entry.methods.map(method => (
+                <button
+                  key={method.id}
+                  type="button"
+                  className="user-question-submit"
+                  disabled={busy || entry.inFlight}
+                  onClick={() => void begin(entry, method.id)}
+                >
+                  {method.label || t('auth.start')}
+                </button>
+              ))}
+              {entry.inFlight ? (
+                <button type="button" className="user-question-skip" disabled={busy} onClick={() => void cancel(entry)}>
+                  {t('auth.cancel')}
+                </button>
+              ) : null}
+            </div>
+          </article>
+        )
+      })}
       {error ? <p className="user-question-status exception">{error}</p> : null}
     </SettingsDrawer>
   )

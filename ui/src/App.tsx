@@ -16,6 +16,7 @@ import { FilePreview } from './FilePreview'
 import { NewSessionSheet, useSessionBasis } from './NewSession'
 import { BotChatView } from './BotChatView'
 import { TurnRail } from './TurnRail'
+import { createInteractionSync, createAuthorizationCatalog } from './interaction-sync'
 import { ImageFailureScope } from './ImageFailureScope'
 import { CurrentActivity } from './CurrentActivity'
 import { currentActivity } from './current-activity'
@@ -176,6 +177,16 @@ export function App() {
   >({})
   const [cuaAvailable, setCuaAvailable] = useState(false)
   const [authPending, setAuthPending] = useState(false)
+  const [authorization, setAuthorization] = useState<Record<string, unknown>>({})
+  const [authorizationCatalog] = useState(() =>
+    createAuthorizationCatalog(async () => {
+      const response = await api('/authorization')
+      if (response.status !== 200) throw new Error('Authorization catalog unavailable')
+      return { available: response.body.available, entries: response.body.entries }
+    }),
+  )
+  const authorizationRevision = useRef<unknown>(undefined)
+  const interactionSync = useRef<ReturnType<typeof createInteractionSync> | null>(null)
   const [filePreview, setFilePreview] = useState<{ path: string; line?: number } | null>(null)
   const [archived, setArchived] = useState<ReadonlySet<string>>(() => new Set())
   const [blanksOpen, setBlanksOpen] = useState(false)
@@ -193,25 +204,31 @@ export function App() {
   const basis = useSessionBasis(sessionId, basisRevision)
 
   useEffect(() => {
-    let cancelled = false
-    async function refreshInteractions() {
-      if (!sessionId) {
-        if (!cancelled) {
-          setApprovals([])
-          setQuestionWaits({})
-        }
-        return
-      }
-      try {
-        const response = await api(`/interactions?sessionId=${encodeURIComponent(sessionId)}`)
-        if (cancelled || response.status !== 200) return
-        const nextApprovals = Array.isArray(response.body.approvals)
-          ? (response.body.approvals as ToolApprovalView[])
-          : []
+    setApprovals([])
+    setQuestionWaits({})
+    const sync = createInteractionSync({
+      visible: !document.hidden,
+      fetch: async signal => {
+        const response = await api(`/interactions?compact=1&sessionId=${encodeURIComponent(sessionId)}`, { signal })
+        if (response.status !== 200) throw new Error('Interactions unavailable')
+        return response.body
+      },
+      active: value => {
+        const body = value as Record<string, any>
+        return Boolean(
+          body.questions?.length ||
+            body.approvals?.some((item: any) => item.state === 'open') ||
+            body.authorization?.prompts?.length ||
+            body.authorization?.inFlight?.length,
+        )
+      },
+      apply: value => {
+        const body = value as Record<string, unknown>
+        const nextApprovals = Array.isArray(body.approvals) ? (body.approvals as ToolApprovalView[]) : []
         setApprovals(nextApprovals)
         const waits: Record<string, { remainingMs?: number; waitState?: UserQuestionWait }> = {}
-        if (Array.isArray(response.body.questions)) {
-          for (const item of response.body.questions as Array<{
+        if (Array.isArray(body.questions)) {
+          for (const item of body.questions as Array<{
             callId?: string
             remainingMs?: number
             waitState?: UserQuestionWait
@@ -222,21 +239,37 @@ export function App() {
           }
         }
         setQuestionWaits(waits)
-        const authorization = response.body.authorization
+        const nextAuthorization = body.authorization
         const prompts =
-          authorization && typeof authorization === 'object' ? (authorization as { prompts?: unknown }).prompts : []
+          nextAuthorization && typeof nextAuthorization === 'object'
+            ? (nextAuthorization as { prompts?: unknown }).prompts
+            : []
         setAuthPending(Array.isArray(prompts) && prompts.length > 0)
-      } catch {
-        /* keep the last known interaction state */
-      }
-    }
-    void refreshInteractions()
-    const id = window.setInterval(() => void refreshInteractions(), 1500)
+        const auth =
+          nextAuthorization && typeof nextAuthorization === 'object'
+            ? (nextAuthorization as Record<string, unknown>)
+            : {}
+        const revision = JSON.stringify([auth.catalogRevision, auth.available])
+        if (authorizationRevision.current !== revision) {
+          authorizationRevision.current = revision
+          authorizationCatalog.invalidate()
+        }
+        setAuthorization(current => (JSON.stringify(current) === JSON.stringify(auth) ? current : auth))
+      },
+      schedule: (fn, ms) => {
+        const timer = window.setTimeout(fn, ms)
+        return () => window.clearTimeout(timer)
+      },
+    })
+    interactionSync.current = sync
+    const visibility = () => sync.setVisible(!document.hidden)
+    document.addEventListener('visibilitychange', visibility)
     return () => {
-      cancelled = true
-      window.clearInterval(id)
+      sync.close()
+      if (interactionSync.current === sync) interactionSync.current = null
+      document.removeEventListener('visibilitychange', visibility)
     }
-  }, [sessionId])
+  }, [sessionId, authorizationCatalog])
 
   useEffect(() => {
     void api('/cua').then(response => setCuaAvailable(response.body.available === true))
@@ -456,6 +489,7 @@ export function App() {
     let stop = false
     let source: EventSource | null = null
     let timer = 0
+    let reconnectDelay = 2000
     let deskDoc: unknown
     let workDoc: unknown
     const take = (event: Event) => {
@@ -471,12 +505,25 @@ export function App() {
       source?.close()
       deskDoc = undefined
       workDoc = undefined
-      const next = new EventSource('/dsh-bot/api/live')
+      if (stop || document.hidden || typeof EventSource === 'undefined') return
+      const next = new EventSource(`/dsh-bot/api/live?sessionId=${encodeURIComponent(sessionId)}`)
       source = next
+      next.addEventListener('interaction-error', () => {
+        if (!stop && source === next) interactionSync.current?.disconnected()
+      })
+      next.addEventListener('interactions', event => {
+        if (stop || source !== next) return
+        const row = take(event)
+        if (row?.sessionId === sessionId) {
+          reconnectDelay = 2000
+          interactionSync.current?.ingest(row)
+        }
+      })
       next.addEventListener('snapshot', event => {
         if (stop || source !== next) return
         const row = take(event)
         if (!row) return
+        reconnectDelay = 2000
         if (row.desk !== undefined) deskDoc = row.desk
         if (row.work !== undefined) workDoc = row.work
         applyLiveDocument(row)
@@ -498,18 +545,32 @@ export function App() {
       })
       next.addEventListener('error', () => {
         if (stop || source !== next) return
+        interactionSync.current?.disconnected()
         next.close()
         if (source === next) source = null
-        timer = window.setTimeout(connect, 2000)
+        timer = window.setTimeout(connect, reconnectDelay)
+        reconnectDelay = Math.min(15_000, reconnectDelay * 2)
       })
     }
+    const visibility = () => {
+      window.clearTimeout(timer)
+      if (document.hidden) {
+        source?.close()
+        source = null
+      } else {
+        reconnectDelay = 2000
+        connect()
+      }
+    }
+    document.addEventListener('visibilitychange', visibility)
     connect()
     return () => {
       stop = true
+      document.removeEventListener('visibilitychange', visibility)
       window.clearTimeout(timer)
       source?.close()
     }
-  }, [])
+  }, [sessionId])
 
   useEffect(() => {
     const onHash = () => {
@@ -1415,7 +1476,11 @@ export function App() {
         />
       ) : null}
       {settings === 'authorization' || (authPending && settings == null) ? (
-        <AuthorizationPanel onClose={() => setSettings(null)} />
+        <AuthorizationPanel
+          authorization={authorization}
+          catalog={authorizationCatalog}
+          onClose={() => setSettings(null)}
+        />
       ) : null}
       {settings === 'cua' && cuaAvailable ? <CuaPanel onClose={() => setSettings(null)} /> : null}
       {sessionId && filePreview ? (

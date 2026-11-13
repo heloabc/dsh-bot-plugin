@@ -123,6 +123,15 @@ A failed thumbnail or viewer image is removed and replaced with a neutral unavai
 
 Actions folds keep their initial view until the user toggles them. Streaming updates, new actions, live-to-durable event replacement and completion do not automatically open or close an existing fold. Text and question boundaries still separate action groups in transcript order.
 
+## Interaction synchronization
+
+The workbench opts into `/dsh-bot/api/interactions?compact=1&sessionId=...`: official questions, tool approvals, authorization prompts/notices and active authorization flow keys, without enumerating providers. Requests without `compact=1` and `/api/authorization` keep their full catalog responses for older clients.
+
+The existing authenticated `/api/live` SSE transport emits `interactions` only when the compact snapshot changes. Native services do not all expose reliable change events, so this is hybrid synchronization: an independent in-process one-second snapshot sampler (no provider listing), not pure native push. Desk RPC stalls do not block interaction delivery. Snapshot failures signal REST fallback without disconnecting the desk stream.
+
+A visible connected view reconciles once on entry and every 60 seconds. Unsupported/disconnected streams use bounded 2–15-second backoff; pending questions, open tool approvals or authorization flows keep the fallback at 1.5 seconds. Requests are single-flight with a 10-second abort deadline; newer SSE state wins over late REST results. Session switches discard stale results. Hidden views pause reconciliation and close SSE; resume reconciles immediately and reconnects. These rules do not stop unrelated resource/status updates.
+
+The authorization drawer loads the provider directory only on demand, with a per-App single-flight 30-second cache, no browser storage or cross-App cache. Local authorization lifecycle changes and mutations invalidate it. An open drawer revalidates every 30 seconds and on background resume: native provider registration has no complete event hook, so these changes are eventually reconciled rather than falsely treated as push-complete. Dynamic prompts/notices remain on the compact channel even when the drawer is closed.
 
 DSH loads `dist/`. Rebuild after changing `src/`. Until `npm --prefix ui run build` has run, `/dsh-bot/` is 404.
 

@@ -4,6 +4,7 @@ import { readFileSync } from 'node:fs'
 import test from 'node:test'
 import { build } from 'esbuild'
 import { parseHTML } from 'linkedom'
+import { createAuthorizationCatalog } from '../ui/src/interaction-sync.ts'
 
 // A real mounted React tree, not SSR: keep the same buttons across streaming,
 // durable replacement, new activity and completion, in both transcript modes.
@@ -16,6 +17,7 @@ const compiled = await build({
       import { Transcript } from './ui/src/transcript.tsx'
       import { ActivityGroup } from './ui/src/ProcessRow.tsx'
       import { MarkdownView } from './ui/src/MarkdownView.tsx'
+      import { AuthorizationPanel } from './ui/src/SettingsPanels.tsx'
       import { ImageFailureScope } from './ui/src/ImageFailureScope.tsx'
       export { act }
       export function mount(node) {
@@ -23,6 +25,7 @@ const compiled = await build({
         return {
           render: props => act(() => root.render(<Transcript {...props} />)),
           group: props => act(() => root.render(<ActivityGroup {...props} />)),
+          authPanel: props => act(async () => { root.render(<AuthorizationPanel {...props} />); await Promise.resolve() }),
           image: props => act(() => root.render(<MarkdownView {...props} />)),
           scopedImage: props => act(() => root.render(
             <ImageFailureScope key={props.sessionId || 'session-one'}>
@@ -94,6 +97,7 @@ function harness() {
     render(props: unknown): Promise<void>
     group(props: unknown): Promise<void>
     image(props: unknown): Promise<void>
+    authPanel(props: unknown): Promise<void>
     scopedImage(props: unknown): Promise<void>
     close(): Promise<void>
   }
@@ -392,6 +396,58 @@ test('viewer error releases modal state, shows neutral unavailable message and n
     for (let i = 0; i < 3; i++) await h.scopedImage({ text, revision: String(i), onOpenFile() {} })
     assert.equal(doc.querySelector('img'), null)
     assert.equal(doc.querySelector('[role="dialog"]'), null)
+  } finally {
+    await h.close()
+  }
+})
+
+test('authorization catalog loads only for an open drawer and dynamic prompts do not reload it', async () => {
+  const h = harness()
+  let reads = 0
+  const catalog = createAuthorizationCatalog(async () => {
+    reads++
+    return {
+      available: true,
+      entries: [
+        {
+          key: 'sample',
+          label: 'Sample provider',
+          methods: [{ id: 'browser', label: 'Browser login' }],
+          inFlight: false,
+        },
+      ],
+    }
+  })
+  const authorization = { available: true, catalogRevision: 1, inFlight: [], prompts: [], notices: [] }
+  try {
+    await h.image({ text: 'idle conversation' })
+    assert.equal(reads, 0)
+    await h.authPanel({ onClose() {}, catalog, authorization })
+    assert.equal(reads, 1)
+    for (let i = 0; i < 5; i++) {
+      await h.authPanel({
+        onClose() {},
+        catalog,
+        authorization: {
+          ...authorization,
+          prompts: [{ promptId: 'official-prompt', kind: 'text', message: `Pending prompt ${i}` }],
+          notices: [{ message: 'Continue browser login' }],
+          inFlight: ['sample'],
+        },
+      })
+    }
+    assert.equal(reads, 1, 'SSE prompt/notice changes must not refetch static provider entries')
+    assert.match(h.container.ownerDocument.body.textContent!, /Pending prompt 4/)
+    const cancel = [...h.container.ownerDocument.querySelectorAll('button')].find(
+      button => button.textContent === 'Cancel',
+    )
+    assert.ok(cancel && !cancel.disabled, 'the live authorization flow must remain cancellable')
+    catalog.invalidate()
+    await h.authPanel({ onClose() {}, catalog, authorization: { ...authorization, catalogRevision: 2 } })
+    assert.equal(reads, 2)
+    await h.image({ text: 'drawer closed' })
+    await h.authPanel({ onClose() {}, catalog, authorization: { ...authorization, catalogRevision: 2 } })
+    assert.equal(reads, 2, 'reopening within TTL shares the per-App cache')
   } finally {
     await h.close()
   }

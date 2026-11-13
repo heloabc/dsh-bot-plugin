@@ -68,6 +68,8 @@ export function createAuthorizationController() {
   const notices: AuthorizationNoticeView[] = []
   let host: HostContext | null = null
   let nextId = 1
+  let catalogRevision = 0
+  const active = new Map<symbol, unknown>()
 
   function service() {
     return host?.get?.('authorization')
@@ -123,10 +125,16 @@ export function createAuthorizationController() {
     })
   }
 
-  function snapshot() {
+  type SnapshotBase = { available: boolean; notices: AuthorizationNoticeView[]; prompts: AuthorizationPromptView[] }
+  type CompactSnapshot = SnapshotBase & { catalogRevision: number; inFlight: unknown[] }
+  type CatalogSnapshot = SnapshotBase & { entries: AuthorizationEntryView[] }
+  function snapshot(options: { catalog: false }): CompactSnapshot
+  function snapshot(options?: { catalog?: true }): CatalogSnapshot
+  function snapshot(options: { catalog?: boolean }): CompactSnapshot | CatalogSnapshot
+  function snapshot(options: { catalog?: boolean } = {}): CompactSnapshot | CatalogSnapshot {
     return {
       available: Boolean(service()),
-      entries: list(),
+      ...(options.catalog === false ? { catalogRevision, inFlight: [...active.values()] } : { entries: list() }),
       notices: [...notices],
       prompts: [...prompts.values()].map(entry => entry.prompt),
     }
@@ -138,6 +146,9 @@ export function createAuthorizationController() {
       return toolError('UNAVAILABLE', 'Official authorization is not composed on this host.')
     }
     if (input.key == null) return toolError('VALIDATION', 'A credential key is required.')
+    const activeKey = Symbol()
+    active.set(activeKey, input.key)
+    catalogRevision++
     try {
       const outcome = await auth.begin({
         key: input.key,
@@ -195,6 +206,9 @@ export function createAuthorizationController() {
         code === 'NO_FLOW' || code === 'UNKNOWN_METHOD' || code === 'ALREADY_IN_FLIGHT' ? code : 'UNAVAILABLE',
         message,
       )
+    } finally {
+      active.delete(activeKey)
+      catalogRevision++
     }
   }
 
@@ -226,14 +240,18 @@ export function createAuthorizationController() {
         entry.reject(declined())
       }
     }
+    catalogRevision++
     auth.cancel(input.key)
     return { ok: true, path: 'cancelled' }
   }
 
   function bind(ctx: HostContext) {
     host = ctx
+    catalogRevision++
     return () => {
       if (host === ctx) host = null
+      catalogRevision++
+      active.clear()
       for (const entry of [...prompts.values()]) {
         prompts.delete(entry.promptId)
         entry.reject(declined())
