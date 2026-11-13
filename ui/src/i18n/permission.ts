@@ -12,6 +12,10 @@ const en = {
   'permission.unavailable': 'Official permission presets are not available on this host.',
   'permission.failed': 'The permission could not be changed.',
   'permission.close': 'Close',
+  'permission.preset.readOnly': 'Read Only',
+  'permission.preset.workspaceWrite': 'Workspace Write',
+  'permission.preset.fullAccess': 'Full access',
+  'permission.preset.auto': 'Auto review',
 } as const
 
 const zh: Record<keyof typeof en, string> = {
@@ -26,6 +30,10 @@ const zh: Record<keyof typeof en, string> = {
   'permission.unavailable': '此主机未提供官方权限预设。',
   'permission.failed': '权限未能更改。',
   'permission.close': '关闭',
+  'permission.preset.readOnly': '只读',
+  'permission.preset.workspaceWrite': '工作区可写',
+  'permission.preset.fullAccess': '完全访问',
+  'permission.preset.auto': '自动审阅',
 }
 
 export const permission = { en, zh }

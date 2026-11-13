@@ -19,6 +19,7 @@ import { TurnRail } from './TurnRail'
 import { CurrentActivity } from './CurrentActivity'
 import { currentActivity } from './current-activity'
 import { AuthorizationPanel, CuaPanel, PermissionPanel } from './SettingsPanels'
+import { presetLabel } from './permission-label.ts'
 import type { ToolApprovalView } from './ToolApprovalCard'
 import type { UserQuestionWait } from './user-question'
 import { railMarks } from './turn-marks'
@@ -137,14 +138,6 @@ function loadArchivedIds(): Promise<string[]> {
     })
     socket.addEventListener('error', () => finish([]))
   })
-}
-
-function presetLabel(preset: string): string {
-  if (preset === 'workspace-write') return 'Workspace Write'
-  if (preset === 'read-only' || preset === 'readonly') return 'Read Only'
-  if (preset === 'danger-full-access') return 'Full access'
-  if (preset === 'auto') return 'Auto review'
-  return preset
 }
 
 export function App() {
@@ -1378,7 +1371,7 @@ export function App() {
                   {thread.preset ? (
                     <button type="button" className="chip" onClick={() => setSettings('permission')}>
                       <PermissionIcon preset={thread.preset} />
-                      {presetLabel(thread.preset)}
+                      {presetLabel(thread.preset, t)}
                     </button>
                   ) : null}
                 </div>
@@ -1407,21 +1400,21 @@ export function App() {
             <p className="stats">
               {reason || (!execution.ready ? hostText(execution.reason, execution.reason, t) : statsLine(thread))}
             </p>
-            {settings === 'permission' && sessionId ? (
-              <PermissionPanel
-                sessionId={sessionId}
-                current={thread.preset}
-                onClose={() => setSettings(null)}
-                onChanged={() => setBasisRevision(current => current + 1)}
-              />
-            ) : null}
-            {settings === 'authorization' || (authPending && settings == null) ? (
-              <AuthorizationPanel onClose={() => setSettings(null)} />
-            ) : null}
-            {settings === 'cua' && cuaAvailable ? <CuaPanel onClose={() => setSettings(null)} /> : null}
           </form>
         </div>
       </section>
+      {settings === 'permission' && sessionId ? (
+        <PermissionPanel
+          sessionId={sessionId}
+          current={thread.preset}
+          onClose={() => setSettings(null)}
+          onChanged={() => setBasisRevision(current => current + 1)}
+        />
+      ) : null}
+      {settings === 'authorization' || (authPending && settings == null) ? (
+        <AuthorizationPanel onClose={() => setSettings(null)} />
+      ) : null}
+      {settings === 'cua' && cuaAvailable ? <CuaPanel onClose={() => setSettings(null)} /> : null}
       {sessionId && filePreview ? (
         <FilePreview
           sessionId={sessionId}

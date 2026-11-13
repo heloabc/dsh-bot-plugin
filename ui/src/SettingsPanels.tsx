@@ -1,6 +1,8 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useState, type ReactNode } from 'react'
+import { createPortal } from 'react-dom'
 import { api } from './api.ts'
 import { useI18n } from './locale'
+import { presetDisplayName } from './permission-label.ts'
 
 type PermissionOption = { value: string; name: string; description?: string }
 
@@ -10,6 +12,50 @@ type PermissionBody = {
   options?: PermissionOption[]
   autoAvailable?: boolean
   message?: string
+}
+
+export function SettingsDrawer({
+  title,
+  closeLabel,
+  onClose,
+  children,
+}: {
+  title: string
+  closeLabel: string
+  onClose: () => void
+  children: ReactNode
+}) {
+  useEffect(() => {
+    if (typeof document === 'undefined') return
+    const previous = document.body.style.overflow
+    document.body.style.overflow = 'hidden'
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') onClose()
+    }
+    document.addEventListener('keydown', onKey)
+    return () => {
+      document.body.style.overflow = previous
+      document.removeEventListener('keydown', onKey)
+    }
+  }, [onClose])
+
+  const node = (
+    <div className="settings-drawer">
+      <div className="settings-drawer-mask" onClick={onClose} />
+      <div className="settings-drawer-sheet" role="dialog" aria-modal="true" aria-label={title} tabIndex={-1}>
+        <div className="settings-drawer-handle" aria-hidden="true" />
+        <div className="settings-head">
+          <h3>{title}</h3>
+          <button type="button" className="user-question-skip" onClick={onClose}>
+            {closeLabel}
+          </button>
+        </div>
+        <div className="settings-drawer-body">{children}</div>
+      </div>
+    </div>
+  )
+  if (typeof document === 'undefined' || !document.body) return node
+  return createPortal(node, document.body)
 }
 
 export function PermissionPanel({
@@ -67,19 +113,15 @@ export function PermissionPanel({
 
   const options = view?.options ?? []
 
+  const currentOption = options.find(option => option.value === (view?.currentValue ?? current))
+
   return (
-    <div className="settings-panel" role="dialog" aria-label={t('permission.title')}>
-      <div className="settings-head">
-        <h3>{t('permission.title')}</h3>
-        <button type="button" className="user-question-skip" onClick={onClose}>
-          {t('permission.close')}
-        </button>
-      </div>
+    <SettingsDrawer title={t('permission.title')} closeLabel={t('permission.close')} onClose={onClose}>
       {view && view.available === false ? <p className="user-question-hint">{t('permission.unavailable')}</p> : null}
-      {view?.currentValue ? (
+      {view?.currentValue || current ? (
         <p className="user-question-hint">
           {t('permission.current')}:{' '}
-          {options.find(option => option.value === view.currentValue)?.name || current || view.currentValue}
+          {presetDisplayName(view?.currentValue ?? current ?? '', currentOption?.name, t) || '—'}
         </p>
       ) : null}
       <ul className="user-question-options">
@@ -91,7 +133,7 @@ export function PermissionPanel({
               disabled={busy || option.value === 'custom'}
               onClick={() => choose(option)}
             >
-              <span className="user-question-option-label">{option.name}</span>
+              <span className="user-question-option-label">{presetDisplayName(option.value, option.name, t)}</span>
               {option.description ? <span className="user-question-option-desc">{option.description}</span> : null}
             </button>
           </li>
@@ -119,7 +161,7 @@ export function PermissionPanel({
         </div>
       ) : null}
       {error ? <p className="user-question-status exception">{error}</p> : null}
-    </div>
+    </SettingsDrawer>
   )
 }
 
@@ -223,13 +265,7 @@ export function AuthorizationPanel({ onClose }: { onClose: () => void }) {
   }
 
   return (
-    <div className="settings-panel" role="dialog" aria-label={t('auth.title')}>
-      <div className="settings-head">
-        <h3>{t('auth.title')}</h3>
-        <button type="button" className="user-question-skip" onClick={onClose}>
-          {t('auth.close')}
-        </button>
-      </div>
+    <SettingsDrawer title={t('auth.title')} closeLabel={t('auth.close')} onClose={onClose}>
       {!available ? <p className="user-question-hint">{t('auth.unavailable')}</p> : null}
       {available && entries.length === 0 && prompts.length === 0 ? (
         <p className="user-question-hint">{t('auth.empty')}</p>
@@ -341,7 +377,7 @@ export function AuthorizationPanel({ onClose }: { onClose: () => void }) {
         </article>
       ))}
       {error ? <p className="user-question-status exception">{error}</p> : null}
-    </div>
+    </SettingsDrawer>
   )
 }
 
@@ -400,13 +436,7 @@ export function CuaPanel({ onClose }: { onClose: () => void }) {
   if (loaded && !available) return null
 
   return (
-    <div className="settings-panel" role="dialog" aria-label={t('cua.title')}>
-      <div className="settings-head">
-        <h3>{t('cua.title')}</h3>
-        <button type="button" className="user-question-skip" onClick={onClose}>
-          {t('cua.close')}
-        </button>
-      </div>
+    <SettingsDrawer title={t('cua.title')} closeLabel={t('cua.close')} onClose={onClose}>
       <h4 className="user-question-header">{t('cua.system')}</h4>
       {(['accessibility', 'screenRecording'] as const).map(permission => (
         <div key={permission} className="user-question-row">
@@ -463,6 +493,6 @@ export function CuaPanel({ onClose }: { onClose: () => void }) {
         </div>
       ))}
       {error ? <p className="user-question-status exception">{error}</p> : null}
-    </div>
+    </SettingsDrawer>
   )
 }

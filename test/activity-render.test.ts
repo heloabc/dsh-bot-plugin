@@ -15,6 +15,7 @@ const compiled = await build({
       import { Transcript } from './ui/src/transcript.tsx'
       import { CurrentActivity } from './ui/src/CurrentActivity.tsx'
       import { ToolApprovalCard } from './ui/src/ToolApprovalCard.tsx'
+      import { SettingsDrawer } from './ui/src/SettingsPanels.tsx'
       import { ToolCallRow, ToolCallRowView, ActivityGroup, ActivityDisclosure } from './ui/src/ProcessRow.tsx'
       import { Collapse } from './ui/src/Collapse.tsx'
       export const renderExpandedTool = props => renderToStaticMarkup(<ToolCallRowView open={true} argsOpen={true} onToggle={() => {}} onArgsToggle={() => {}} {...props} />)
@@ -30,6 +31,18 @@ const compiled = await build({
       export const renderCurrent = (props) => renderToStaticMarkup(<CurrentActivity {...props} />)
       export const renderActivity = (props) => renderToStaticMarkup(<ActivityGroup {...props} />)
       export const renderApproval = (props) => renderToStaticMarkup(<ToolApprovalCard {...props} />)
+      export const renderSettingsDrawer = (props = {}) => renderToStaticMarkup(
+        <div className="shell">
+          <div className="composer-wrap">
+            <form className="column">
+              <p className="stats">1 turns · 1 steps</p>
+            </form>
+          </div>
+          <SettingsDrawer title={props.title || 'Permissions'} closeLabel={props.closeLabel || 'Close'} onClose={() => {}}>
+            {props.children || <p>drawer body</p>}
+          </SettingsDrawer>
+        </div>
+      )
     `,
     resolveDir: new URL('..', import.meta.url).pathname,
     loader: 'tsx',
@@ -58,6 +71,7 @@ const {
   renderExpandedTool,
   exerciseDisclosure,
   renderApproval,
+  renderSettingsDrawer,
 } = mod.exports
 const tool = (id: string, values = {}) => ({
   kind: 'tool',
@@ -896,4 +910,19 @@ test('SSR: a tool-approval card renders interactive controls when a session is p
     ],
   })
   assert.ok(current.includes('Waiting for your answer'))
+})
+
+test('settings drawer is an overlay, not in-flow under the composer', () => {
+  const html = renderSettingsDrawer!({})
+  assert.ok(html.includes('settings-drawer-mask'))
+  assert.ok(html.includes('role="dialog"'))
+  assert.ok(html.includes('aria-modal="true"'))
+  assert.ok(html.includes('Permissions'))
+  assert.ok(html.includes('drawer body'))
+  assert.ok(!html.includes('settings-panel'))
+  const form = html.slice(html.indexOf('<form'), html.indexOf('</form>') + 7)
+  assert.ok(form.includes('1 turns · 1 steps'))
+  assert.ok(!form.includes('settings-drawer'))
+  assert.ok(!form.includes('aria-modal'))
+  assert.ok(!form.includes('role="dialog"'))
 })
