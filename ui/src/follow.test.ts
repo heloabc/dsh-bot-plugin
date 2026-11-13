@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { ingestFrame, isOpeningSnapshot, openingHistoryCut, processHeading, turnPieces } from './follow.ts'
-import { emptyThread, type Segment, type ThreadState } from './types.ts'
+import { emptyThread, type Segment, type ThreadState, type ToolSegment } from './types.ts'
 
 function reduce(frames: unknown[]): ThreadState {
   const seen = new Set<number>()
@@ -312,13 +312,13 @@ function text(seq: number, value: string): Segment {
   return { kind: 'assistant', id: `t${seq}`, text: value, streaming: false, seq, turn: 1, step: seq }
 }
 
-function tool(seq: number, name: string): Segment {
+function tool(seq: number, name: string, args = ''): ToolSegment {
   return {
     kind: 'tool',
     id: `c${seq}`,
     callId: `c${seq}`,
     name,
-    args: '',
+    args,
     result: '',
     error: false,
     running: false,
@@ -347,7 +347,13 @@ test('assistant text stays between the tool batches around it', () => {
     text(11, 'the one-page site is up'),
   ])
   assert.deepEqual(
-    pieces.map(piece => (piece.type === 'text' ? piece.segment.text : processHeading(piece.segments))),
+    pieces.map(piece =>
+      piece.type === 'activity'
+        ? processHeading(piece.segments)
+        : piece.type === 'question'
+          ? piece.segment.name
+          : piece.segment.text,
+    ),
     [
       'Read files',
       "I'll start by inspecting the workspace.",
@@ -365,10 +371,13 @@ test('a running batch uses the present-tense heading', () => {
 })
 
 test('ask_user_question stays a first-class piece between surrounding activity', () => {
-  const question = tool(4, 'ask_user_question')
-  question.args = JSON.stringify({
-    questions: [{ id: 'confirm_delete', header: '确认删除', question: '删除这两个目录吗？' }],
-  })
+  const question = tool(
+    4,
+    'ask_user_question',
+    JSON.stringify({
+      questions: [{ id: 'confirm_delete', header: '确认删除', question: '删除这两个目录吗？' }],
+    }),
+  )
   const pieces = turnPieces([tool(1, 'bash'), think(2, 'check size'), question, tool(5, 'bash')])
   assert.deepEqual(
     pieces.map(piece =>
