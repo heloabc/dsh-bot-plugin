@@ -264,3 +264,66 @@ test('duplicate open submissions fail after the first official answer', async ()
   assert.equal(second.ok, false)
   assert.deepEqual(await asked, { answers: [{ id: 'confirm_delete', selected: ['Cancel, do not delete'] }] })
 })
+
+test('requesting changes rejects an open plan-review wait as ASK_CANCELLED', async () => {
+  const ctx = new OfficialAskHost()
+  const answerer = createQuestionAnswerer()
+  answerer.listen(ctx)
+  const asked = officialAsk(ctx, {
+    questions: [
+      {
+        id: 'review',
+        question: 'Approve this plan?',
+        detail: '# Plan\nDo the work.',
+        intent: { kind: 'plan-review', approve: 'Approve' },
+        options: [{ label: 'Approve' }, { label: 'Request changes' }],
+      },
+    ],
+    agent: { id: 'sess-bot' },
+  })
+  const result = answerer.cancel({ sessionId: 'sess-bot' })
+  assert.equal(result.ok, true)
+  assert.equal(result.path, 'cancelled')
+  await assert.rejects(asked, error => {
+    assert.equal((error as { code?: string }).code, 'ASK_CANCELLED')
+    return true
+  })
+})
+
+test('a timed question can take more time, time out, then accept a continued answer', async () => {
+  const ctx = new OfficialAskHost()
+  const answered: unknown[] = []
+  const answerer = createQuestionAnswerer()
+  answerer.listen({
+    on: ctx.on.bind(ctx),
+    agents: { get: (id: string) => (id === 'sess-bot' ? { id: 'sess-bot' } : undefined) },
+    userQuestions: {
+      answer(_agent: unknown, callId: string, answer: OfficialAnswer) {
+        answered.push({ callId, answer })
+        return callId === 'call_timed'
+      },
+    },
+  })
+  const asked = officialAsk(ctx, {
+    questions,
+    agent: { id: 'sess-bot' },
+    wait: { callId: 'call_timed', timed: true },
+  })
+  const held = answerer.takeTime({ sessionId: 'sess-bot', callId: 'call_timed' })
+  assert.equal(held.ok, true)
+  assert.equal(answerer.snapshot('sess-bot')[0]?.waitState, 'waiting')
+  const timed = answerer.timeout({ sessionId: 'sess-bot', callId: 'call_timed' })
+  assert.equal(timed.ok, true)
+  await assert.rejects(asked, error => {
+    assert.equal((error as { code?: string }).code, 'ASK_TIMED_OUT')
+    return true
+  })
+  const late = answerer.submit({
+    sessionId: 'sess-bot',
+    callId: 'call_timed',
+    answers: [{ id: 'confirm_delete', selected: ['Cancel, do not delete'] }],
+  })
+  assert.equal(late.ok, true)
+  assert.equal(late.path, 'continued')
+  assert.equal((answered[0] as { callId: string }).callId, 'call_timed')
+})

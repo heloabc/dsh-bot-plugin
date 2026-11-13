@@ -1,7 +1,7 @@
 import { strict as assert } from 'node:assert'
 import test from 'node:test'
 import type { ToolSegment } from './types.ts'
-import { isUserQuestionTool, userQuestionView } from './user-question.ts'
+import { isUserQuestionTool, optionPresentation, userQuestionView } from './user-question.ts'
 
 const questions = [
   {
@@ -134,4 +134,69 @@ test('userQuestionView keeps official option labels and ids unredacted for submi
   assert.equal(view?.questions[0]?.id, 'api_key')
   assert.equal(view?.questions[0]?.options[0]?.label, 'sk-live-1234567890abcdef')
   assert.deepEqual(view?.questions[0]?.selected, ['sk-live-1234567890abcdef'])
+})
+
+test('userQuestionView keeps a timed pending result answerable instead of settled', () => {
+  const view = userQuestionView(
+    tool({
+      running: false,
+      resultReceived: true,
+      status: 'succeeded',
+      args: JSON.stringify({ questions, timeout: 120 }),
+      result: JSON.stringify({ pending: true, callId: 'call_10fxzqal' }),
+    }),
+  )
+  assert.equal(view?.state, 'continued')
+  assert.equal(view?.wait, 'continued')
+  assert.equal(view?.timeoutMs, 120000)
+})
+
+test('userQuestionView narrows plan-review and approval intents', () => {
+  const plan = userQuestionView(
+    tool({
+      args: JSON.stringify({
+        questions: [
+          {
+            id: 'review',
+            question: 'Approve the plan?',
+            detail: '# Ship it',
+            intent: { kind: 'plan-review', approve: 'Approve' },
+            options: [{ label: 'Approve' }, { label: 'Request changes' }],
+          },
+        ],
+      }),
+    }),
+  )
+  assert.equal(plan?.presentation, 'plan-review')
+  const approval = userQuestionView(
+    tool({
+      args: JSON.stringify({
+        questions: [
+          {
+            id: 'app',
+            question: 'Allow Notes?',
+            intent: {
+              kind: 'approval',
+              approve: 'Allow',
+              reject: 'Reject',
+              always: 'Always allow',
+              subject: { name: 'Notes' },
+            },
+            options: [{ label: 'Allow' }, { label: 'Reject' }, { label: 'Always allow' }],
+          },
+        ],
+      }),
+    }),
+  )
+  assert.equal(approval?.presentation, 'approval')
+})
+
+test('optionPresentation extracts a recommended badge without changing the official label', () => {
+  const presented = optionPresentation('Delete them now (Recommended)')
+  assert.equal(presented.label, 'Delete them now (Recommended)')
+  assert.equal(presented.displayLabel, 'Delete them now')
+  assert.equal(presented.recommended, true)
+  const chinese = optionPresentation('直接彻底删除（推荐）')
+  assert.equal(chinese.recommended, true)
+  assert.equal(chinese.displayLabel, '直接彻底删除')
 })

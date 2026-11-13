@@ -17,6 +17,10 @@ import { NewSessionSheet, useSessionBasis } from './NewSession'
 import { BotChatView } from './BotChatView'
 import { TurnRail } from './TurnRail'
 import { CurrentActivity } from './CurrentActivity'
+import { currentActivity } from './current-activity'
+import { AuthorizationPanel, CuaPanel, PermissionPanel } from './SettingsPanels'
+import type { ToolApprovalView } from './ToolApprovalCard'
+import type { UserQuestionWait } from './user-question'
 import { railMarks } from './turn-marks'
 import { botExchange, mainSegments } from './bot-chat'
 import { applyLogEvent, applyEphemeralFrame, previewOf } from './follow'
@@ -171,6 +175,13 @@ export function App() {
   const [mentionClosed, setMentionClosed] = useState('')
   const [reason, setReason] = useState('')
   const [menuOpen, setMenuOpen] = useState(false)
+  const [settings, setSettings] = useState<'permission' | 'authorization' | 'cua' | null>(null)
+  const [approvals, setApprovals] = useState<ToolApprovalView[]>([])
+  const [questionWaits, setQuestionWaits] = useState<
+    Record<string, { remainingMs?: number; waitState?: UserQuestionWait }>
+  >({})
+  const [cuaAvailable, setCuaAvailable] = useState(false)
+  const [authPending, setAuthPending] = useState(false)
   const [filePreview, setFilePreview] = useState<{ path: string; line?: number } | null>(null)
   const [archived, setArchived] = useState<ReadonlySet<string>>(() => new Set())
   const [blanksOpen, setBlanksOpen] = useState(false)
@@ -186,6 +197,56 @@ export function App() {
   const [workNow, setWorkNow] = useState(() => Date.now())
   const [workerOwner, setWorkerOwner] = useState('')
   const basis = useSessionBasis(sessionId, basisRevision)
+
+  useEffect(() => {
+    let cancelled = false
+    async function refreshInteractions() {
+      if (!sessionId) {
+        if (!cancelled) {
+          setApprovals([])
+          setQuestionWaits({})
+        }
+        return
+      }
+      try {
+        const response = await api(`/interactions?sessionId=${encodeURIComponent(sessionId)}`)
+        if (cancelled || response.status !== 200) return
+        const nextApprovals = Array.isArray(response.body.approvals)
+          ? (response.body.approvals as ToolApprovalView[])
+          : []
+        setApprovals(nextApprovals)
+        const waits: Record<string, { remainingMs?: number; waitState?: UserQuestionWait }> = {}
+        if (Array.isArray(response.body.questions)) {
+          for (const item of response.body.questions as Array<{
+            callId?: string
+            remainingMs?: number
+            waitState?: UserQuestionWait
+          }>) {
+            if (typeof item.callId === 'string' && item.callId !== '') {
+              waits[item.callId] = { remainingMs: item.remainingMs, waitState: item.waitState }
+            }
+          }
+        }
+        setQuestionWaits(waits)
+        const authorization = response.body.authorization
+        const prompts =
+          authorization && typeof authorization === 'object' ? (authorization as { prompts?: unknown }).prompts : []
+        setAuthPending(Array.isArray(prompts) && prompts.length > 0)
+      } catch {
+        /* keep the last known interaction state */
+      }
+    }
+    void refreshInteractions()
+    const id = window.setInterval(() => void refreshInteractions(), 1500)
+    return () => {
+      cancelled = true
+      window.clearInterval(id)
+    }
+  }, [sessionId])
+
+  useEffect(() => {
+    void api('/cua').then(response => setCuaAvailable(response.body.available === true))
+  }, [])
   const scrollRef = useRef<HTMLDivElement>(null)
   const draftRef = useRef<HTMLTextAreaElement>(null)
   const menuRef = useRef<HTMLDivElement>(null)
@@ -1119,6 +1180,9 @@ export function App() {
                   cwd={items.find(s => s.sessionId === sessionId)?.cwd}
                   connectionPhase={syncStatus?.phase}
                   segments={conversation}
+                  approvals={approvals}
+                  questionWaits={questionWaits}
+                  onCompose={text => placeDraft(text, text.length)}
                   completed={thread.completed}
                   failures={thread.failures}
                   retries={thread.retries}
@@ -1162,6 +1226,7 @@ export function App() {
                 currentTurn={thread.turn}
                 tickets={works}
                 connectionPhase={syncStatus?.phase}
+                pendingApprovals={approvals}
               />
             ) : null}
             <div className="card">
@@ -1195,12 +1260,29 @@ export function App() {
                 rows={1}
                 placeholder={
                   sessionId
-                    ? (workPlaceholder(works, t) ??
-                      (isBotSession && turnLive
-                        ? t('composer.interrupt')
-                        : bots.has(sessionId)
-                          ? t('composer.mentionHint')
-                          : t('composer.task')))
+                    ? currentActivity({
+                        segments: thread.segments,
+                        drafting: thread.drafting,
+                        currentTurn: thread.turn,
+                        tickets: works,
+                        pendingApprovals: approvals,
+                        t,
+                      })?.text === t('question.waiting') ||
+                      currentActivity({
+                        segments: thread.segments,
+                        drafting: thread.drafting,
+                        currentTurn: thread.turn,
+                        tickets: works,
+                        pendingApprovals: approvals,
+                        t,
+                      })?.text === t('approval.waiting')
+                      ? t('question.waiting')
+                      : (workPlaceholder(works, t) ??
+                        (isBotSession && turnLive
+                          ? t('composer.interrupt')
+                          : bots.has(sessionId)
+                            ? t('composer.mentionHint')
+                            : t('composer.task')))
                     : t('composer.pick')
                 }
                 disabled={!sessionId}
@@ -1258,27 +1340,46 @@ export function App() {
                       <button type="button" role="menuitem" onClick={() => insertSlash()}>
                         {t('composer.command')}
                       </button>
-                      <button type="button" role="menuitem" onClick={() => insertSlash('/permission read-only')}>
-                        Read Only
-                      </button>
-                      <button type="button" role="menuitem" onClick={() => insertSlash('/permission workspace-write')}>
-                        Workspace Write
+                      <button
+                        type="button"
+                        role="menuitem"
+                        onClick={() => {
+                          setMenuOpen(false)
+                          setSettings('permission')
+                        }}
+                      >
+                        {t('permission.open')}
                       </button>
                       <button
                         type="button"
                         role="menuitem"
-                        onClick={() => insertSlash('/permission danger-full-access')}
+                        onClick={() => {
+                          setMenuOpen(false)
+                          setSettings('authorization')
+                        }}
                       >
-                        Full access
+                        {t('auth.open')}
                       </button>
+                      {cuaAvailable ? (
+                        <button
+                          type="button"
+                          role="menuitem"
+                          onClick={() => {
+                            setMenuOpen(false)
+                            setSettings('cua')
+                          }}
+                        >
+                          {t('cua.open')}
+                        </button>
+                      ) : null}
                       <p className="plus-note">{t('composer.filesLater')}</p>
                     </div>
                   ) : null}
                   {thread.preset ? (
-                    <span className="chip">
+                    <button type="button" className="chip" onClick={() => setSettings('permission')}>
                       <PermissionIcon preset={thread.preset} />
                       {presetLabel(thread.preset)}
-                    </span>
+                    </button>
                   ) : null}
                 </div>
                 <div className="trailing">
@@ -1306,6 +1407,18 @@ export function App() {
             <p className="stats">
               {reason || (!execution.ready ? hostText(execution.reason, execution.reason, t) : statsLine(thread))}
             </p>
+            {settings === 'permission' && sessionId ? (
+              <PermissionPanel
+                sessionId={sessionId}
+                current={thread.preset}
+                onClose={() => setSettings(null)}
+                onChanged={() => setBasisRevision(current => current + 1)}
+              />
+            ) : null}
+            {settings === 'authorization' || (authPending && settings == null) ? (
+              <AuthorizationPanel onClose={() => setSettings(null)} />
+            ) : null}
+            {settings === 'cua' && cuaAvailable ? <CuaPanel onClose={() => setSettings(null)} /> : null}
           </form>
         </div>
       </section>

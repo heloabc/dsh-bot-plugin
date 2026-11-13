@@ -5,6 +5,8 @@ import { createEngine } from './engine.ts'
 import { registerHttp } from './http.ts'
 import type { HostContext } from './host.ts'
 import { questionAnswererFor } from './questions.ts'
+import { approvalAnswererFor } from './approvals.ts'
+import { authorizationFor } from './authorization.ts'
 import { runtimeFor, workRuntimeFor } from './runtime-registry.ts'
 
 export const name = 'session-foundations-http'
@@ -44,5 +46,9 @@ export function apply(
     () => workRuntimeFor(key) ?? workRuntimeFor(dataDir),
     dataDir,
     () => questionAnswererFor(key) ?? questionAnswererFor(dataDir),
+    {
+      getApprovals: () => approvalAnswererFor(key) ?? approvalAnswererFor(dataDir),
+      getAuthorization: () => authorizationFor(key) ?? authorizationFor(dataDir),
+    },
   )
 }

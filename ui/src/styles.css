@@ -944,6 +944,73 @@ button.user-question-option:disabled {
   color: var(--secondary);
   overflow-wrap: anywhere;
 }
+
+.user-question-badge {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: var(--line);
+  font-size: 11px;
+  line-height: 18px;
+  font-weight: 600;
+  color: var(--secondary);
+  vertical-align: middle;
+}
+.user-question-wait,
+.user-question-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: 10px;
+}
+.user-question-plan {
+  margin-top: 10px;
+  min-width: 0;
+  overflow: auto;
+}
+.user-question-secret {
+  margin: 8px 0 0;
+  letter-spacing: 0.2em;
+  color: var(--secondary);
+}
+.user-question-secret-input {
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+  padding: 8px 10px;
+  border: 0.5px solid var(--line);
+  border-radius: 10px;
+  font: inherit;
+  color: transparent;
+  text-shadow: 0 0 0 var(--ink);
+  -webkit-text-security: disc;
+}
+.settings-panel {
+  margin-top: 12px;
+  padding: 12px 14px;
+  border: 0.5px solid var(--line);
+  border-radius: 16px;
+  background: var(--code-bg);
+}
+.settings-head,
+.settings-confirm {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.settings-head h3 {
+  margin: 0;
+  font-size: 15px;
+  line-height: 24px;
+}
+button.chip {
+  cursor: pointer;
+  font: inherit;
+}
 .back {
   display: none;
   border: 0;

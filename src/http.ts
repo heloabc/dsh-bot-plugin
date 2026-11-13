@@ -3,7 +3,9 @@ import { dirname, extname, join, resolve, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { createDesk, defaultSessionCwd, type DeskRequest } from './desk.ts'
 import type { HostContext } from './host.ts'
-import { toolError } from './errors.ts'
+import { toolError, type ToolPayload } from './errors.ts'
+import { permissionView, setPermission } from './permissions.ts'
+import { cuaAction, cuaSnapshot } from './cua-access.ts'
 import { provisionSession } from './provision.ts'
 import { handleWorkApi, openPageLive, openWorkLive } from './work-http.ts'
 import { createLogSource } from './log/source.ts'
@@ -24,7 +26,13 @@ export function registerHttp(
   getWork: () => ReturnType<typeof import('./work-worker.ts').createWorkRuntime> | null = () => null,
   dataDir = '',
   getQuestions: () => import('./questions.ts').QuestionAnswerer | null = () => null,
+  extras: {
+    getApprovals?: () => import('./approvals.ts').ApprovalAnswerer | null
+    getAuthorization?: () => import('./authorization.ts').AuthorizationController | null
+  } = {},
 ) {
+  const getApprovals = extras.getApprovals ?? (() => null)
+  const getAuthorization = extras.getAuthorization ?? (() => null)
   const webServer = ctx.webServer
   const storeDir = dataDir || (ctx.profileContext?.dir ? join(ctx.profileContext.dir, 'session-foundations') : '')
   const profileDir = ctx.profileContext?.dir || (storeDir !== '' ? dirname(storeDir) : '')
@@ -134,6 +142,147 @@ export function registerHttp(
           return send(res, status, result)
         }
         return send(res, 200, result)
+      }
+      if (req.method === 'POST' && path === '/session-foundations/api/questions/cancel') {
+        const questions = getQuestions()
+        if (!questions)
+          return send(
+            res,
+            503,
+            toolError('UNAVAILABLE', 'The user-questions answerer is not attached to this host yet.'),
+          )
+        const body = await readJson(req)
+        return sendTool(
+          res,
+          questions.cancel({
+            sessionId: typeof body.sessionId === 'string' ? body.sessionId : '',
+            callId: typeof body.callId === 'string' ? body.callId : undefined,
+            answers: Array.isArray(body.answers) ? body.answers : undefined,
+          }),
+        )
+      }
+      if (req.method === 'POST' && path === '/session-foundations/api/questions/timeout') {
+        const questions = getQuestions()
+        if (!questions)
+          return send(
+            res,
+            503,
+            toolError('UNAVAILABLE', 'The user-questions answerer is not attached to this host yet.'),
+          )
+        const body = await readJson(req)
+        return sendTool(
+          res,
+          questions.timeout({
+            sessionId: typeof body.sessionId === 'string' ? body.sessionId : '',
+            callId: typeof body.callId === 'string' ? body.callId : undefined,
+          }),
+        )
+      }
+      if (req.method === 'POST' && path === '/session-foundations/api/questions/take-time') {
+        const questions = getQuestions()
+        if (!questions)
+          return send(
+            res,
+            503,
+            toolError('UNAVAILABLE', 'The user-questions answerer is not attached to this host yet.'),
+          )
+        const body = await readJson(req)
+        return sendTool(
+          res,
+          questions.takeTime({
+            sessionId: typeof body.sessionId === 'string' ? body.sessionId : '',
+            callId: typeof body.callId === 'string' ? body.callId : undefined,
+          }),
+        )
+      }
+      if (req.method === 'GET' && path === '/session-foundations/api/interactions') {
+        const sessionId = url.searchParams.get('sessionId') ?? ''
+        return send(res, 200, {
+          ok: true,
+          questions: getQuestions()?.snapshot(sessionId || undefined) ?? [],
+          approvals: getApprovals()?.snapshot(sessionId || undefined) ?? [],
+          authorization: getAuthorization()?.snapshot() ?? { available: false, entries: [], notices: [], prompts: [] },
+        })
+      }
+      if (req.method === 'POST' && path === '/session-foundations/api/approvals/answer') {
+        const approvals = getApprovals()
+        if (!approvals)
+          return send(
+            res,
+            503,
+            toolError('UNAVAILABLE', 'The tool-approval answerer is not attached to this host yet.'),
+          )
+        const body = await readJson(req)
+        return sendTool(
+          res,
+          approvals.submit({
+            sessionId: typeof body.sessionId === 'string' ? body.sessionId : '',
+            requestId: typeof body.requestId === 'string' ? body.requestId : '',
+            outcome: body.outcome,
+          }),
+        )
+      }
+      if (req.method === 'GET' && path === '/session-foundations/api/permissions') {
+        const sessionId = url.searchParams.get('sessionId') ?? ''
+        return send(res, 200, { ok: true, ...permissionView(ctx, sessionId) })
+      }
+      if (req.method === 'POST' && path === '/session-foundations/api/permissions') {
+        const body = await readJson(req)
+        return sendTool(
+          res,
+          setPermission(
+            ctx,
+            typeof body.sessionId === 'string' ? body.sessionId : '',
+            typeof body.name === 'string' ? body.name : '',
+          ),
+        )
+      }
+      if (req.method === 'GET' && path === '/session-foundations/api/authorization') {
+        const authorization = getAuthorization()
+        if (!authorization) return send(res, 200, { ok: true, available: false, entries: [], notices: [], prompts: [] })
+        return send(res, 200, { ok: true, ...authorization.snapshot() })
+      }
+      if (req.method === 'POST' && path === '/session-foundations/api/authorization/begin') {
+        const authorization = getAuthorization()
+        if (!authorization)
+          return send(res, 503, toolError('UNAVAILABLE', 'Official authorization is not attached to this host yet.'))
+        const body = await readJson(req)
+        return sendTool(
+          res,
+          await authorization.begin({
+            key: body.key,
+            method: typeof body.method === 'string' ? body.method : undefined,
+          }),
+        )
+      }
+      if (req.method === 'POST' && path === '/session-foundations/api/authorization/answer') {
+        const authorization = getAuthorization()
+        if (!authorization)
+          return send(res, 503, toolError('UNAVAILABLE', 'Official authorization is not attached to this host yet.'))
+        const body = await readJson(req)
+        return sendTool(
+          res,
+          authorization.answer({
+            promptId: typeof body.promptId === 'string' ? body.promptId : '',
+            value: typeof body.value === 'string' ? body.value : undefined,
+            declined: body.declined === true,
+          }),
+        )
+      }
+      if (req.method === 'POST' && path === '/session-foundations/api/authorization/cancel') {
+        const authorization = getAuthorization()
+        if (!authorization)
+          return send(res, 503, toolError('UNAVAILABLE', 'Official authorization is not attached to this host yet.'))
+        const body = await readJson(req)
+        return sendTool(res, authorization.cancel({ key: body.key }))
+      }
+      if (req.method === 'GET' && path === '/session-foundations/api/cua') {
+        const locale = url.searchParams.get('locale') ?? 'en'
+        return send(res, 200, { ok: true, ...(await cuaSnapshot(ctx, locale)) })
+      }
+      if (req.method === 'POST' && path === '/session-foundations/api/cua') {
+        const body = await readJson(req)
+        return sendTool(res, await cuaAction(ctx, body))
       }
       if (req.method === 'POST' && path === '/session-foundations/api/sessions/open') {
         const body = await readJson(req)
@@ -413,6 +562,21 @@ function send(res: import('node:http').ServerResponse, status: number, body: unk
     'cache-control': 'no-store',
   })
   res.end(text)
+}
+
+function sendTool(res: import('node:http').ServerResponse, result: ToolPayload) {
+  if (result.ok !== false) return send(res, 200, result)
+  const status =
+    result.code === 'NOT_FOUND'
+      ? 404
+      : result.code === 'CONFLICT' || result.code === 'ALREADY_IN_FLIGHT' || result.code === 'REPLY_QUEUED'
+        ? 409
+        : result.code === 'FORBIDDEN'
+          ? 403
+          : result.code === 'UNAVAILABLE'
+            ? 503
+            : 400
+  return send(res, status, result)
 }
 
 /**

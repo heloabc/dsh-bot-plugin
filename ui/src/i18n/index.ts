@@ -4,6 +4,10 @@ import { chrome } from './chrome.ts'
 import { composer } from './composer.ts'
 import { session } from './session.ts'
 import { question } from './question.ts'
+import { approval } from './approval.ts'
+import { permission } from './permission.ts'
+import { authorization } from './authorization.ts'
+import { cua } from './cua.ts'
 import { work } from './work.ts'
 
 export type Locale = 'en' | 'zh'
@@ -16,6 +20,10 @@ const en = {
   ...work.en,
   ...activity.en,
   ...question.en,
+  ...approval.en,
+  ...permission.en,
+  ...authorization.en,
+  ...cua.en,
 } as const
 
 const zh: Record<keyof typeof en, string> = {
@@ -26,6 +34,10 @@ const zh: Record<keyof typeof en, string> = {
   ...work.zh,
   ...activity.zh,
   ...question.zh,
+  ...approval.zh,
+  ...permission.zh,
+  ...authorization.zh,
+  ...cua.zh,
 }
 
 export type MessageKey = keyof typeof en

@@ -43,7 +43,11 @@ export interface HostContext {
   systemPrompt?: any
   tools?: any
   agentPresets?: any
-  userQuestions?: { answer(agent: unknown, callId: string, answer: unknown): boolean }
+  userQuestions?: {
+    answer(agent: unknown, callId: string, answer: unknown): boolean
+    attachWait?(agent: unknown, callId: string, signal?: AbortSignal): AsyncIterable<{ remainingMs: number }>
+  }
+  authorization?: any
   logger?: { info?(...args: any[]): void; warn?(...args: any[]): void }
   on?(
     event: string,

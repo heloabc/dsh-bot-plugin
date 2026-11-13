@@ -14,6 +14,7 @@ const compiled = await build({
       import { renderToStaticMarkup } from 'react-dom/server'
       import { Transcript } from './ui/src/transcript.tsx'
       import { CurrentActivity } from './ui/src/CurrentActivity.tsx'
+      import { ToolApprovalCard } from './ui/src/ToolApprovalCard.tsx'
       import { ToolCallRow, ToolCallRowView, ActivityGroup, ActivityDisclosure } from './ui/src/ProcessRow.tsx'
       import { Collapse } from './ui/src/Collapse.tsx'
       export const renderExpandedTool = props => renderToStaticMarkup(<ToolCallRowView open={true} argsOpen={true} onToggle={() => {}} onArgsToggle={() => {}} {...props} />)
@@ -28,6 +29,7 @@ const compiled = await build({
       export const renderTool = (props) => renderToStaticMarkup(<ToolCallRow {...props} />)
       export const renderCurrent = (props) => renderToStaticMarkup(<CurrentActivity {...props} />)
       export const renderActivity = (props) => renderToStaticMarkup(<ActivityGroup {...props} />)
+      export const renderApproval = (props) => renderToStaticMarkup(<ToolApprovalCard {...props} />)
     `,
     resolveDir: new URL('..', import.meta.url).pathname,
     loader: 'tsx',
@@ -48,8 +50,15 @@ new Function('require', 'module', 'exports', compiled.outputFiles[0]!.text)(
   mod,
   mod.exports,
 )
-const { renderTranscript, renderTool, renderActivity, renderCurrent, renderExpandedTool, exerciseDisclosure } =
-  mod.exports
+const {
+  renderTranscript,
+  renderTool,
+  renderActivity,
+  renderCurrent,
+  renderExpandedTool,
+  exerciseDisclosure,
+  renderApproval,
+} = mod.exports
 const tool = (id: string, values = {}) => ({
   kind: 'tool',
   id,
@@ -769,4 +778,122 @@ test('SSR: an aborted ask_user_question card can be rebuilt from the tool result
   assert.ok(html.includes('取消，先别删'))
   assert.ok(html.includes('This question was cancelled before you answered.'))
   assert.ok(!html.includes('ask_user_question'))
+})
+
+test('SSR: plan-review and approval-intent cards stay interactive and are not generic tool rows', () => {
+  const plan = tool('call_plan', {
+    name: 'ask_user_question',
+    args: JSON.stringify({
+      questions: [
+        {
+          id: 'review',
+          question: 'Approve this plan?',
+          detail: '# Rollout\nShip the change.',
+          intent: { kind: 'plan-review', approve: 'Approve' },
+          options: [{ label: 'Approve' }, { label: 'Request changes' }],
+        },
+      ],
+    }),
+  })
+  const approval = tool('call_app', {
+    name: 'ask_user_question',
+    args: JSON.stringify({
+      questions: [
+        {
+          id: 'app',
+          question: 'Allow Notes to control the computer?',
+          intent: {
+            kind: 'approval',
+            approve: 'Allow',
+            reject: 'Reject',
+            always: 'Always allow',
+            subject: { name: 'Notes' },
+          },
+          options: [{ label: 'Allow' }, { label: 'Reject' }, { label: 'Always allow' }],
+        },
+      ],
+    }),
+  })
+  const html = renderTranscript!({
+    ...base,
+    sessionId: 'sess-bot',
+    segments: [plan, approval],
+  })
+  assert.ok(html.includes('data-kind="plan-review"'))
+  assert.ok(html.includes('data-kind="approval"'))
+  assert.ok(html.includes('data-session="sess-bot"'))
+  assert.ok(html.includes('type="button"'))
+  assert.ok(html.includes('Approve this plan?'))
+  assert.ok(html.includes('View full plan') || html.includes('查看完整计划'))
+  assert.ok(html.includes('Request changes') || html.includes('请求修改'))
+  assert.ok(html.includes('Allow Notes to control the computer?'))
+  assert.ok(html.includes('Always allow') || html.includes('始终允许'))
+  assert.ok(!html.includes('Waiting for tool result: ask_user_question'))
+})
+
+test('SSR: a timed pending ask_user_question result stays interactive', () => {
+  const question = tool('call_timed', {
+    name: 'ask_user_question',
+    running: false,
+    resultReceived: true,
+    status: 'succeeded',
+    args: JSON.stringify({
+      timeout: 30,
+      questions: [
+        {
+          id: 'confirm_delete',
+          question: 'Delete the directories?',
+          options: [{ label: 'Cancel, do not delete' }],
+        },
+      ],
+    }),
+    result: JSON.stringify({ pending: true, callId: 'call_timed' }),
+  })
+  const html = renderTranscript!({
+    ...base,
+    sessionId: 'sess-bot',
+    segments: [question],
+  })
+  assert.ok(html.includes('user-question-card'))
+  assert.ok(html.includes('type="button"'))
+  assert.ok(html.includes('Delete the directories?'))
+  assert.ok(!html.includes('Answered'))
+  const current = renderCurrent!({ segments: [question], drafting: true, currentTurn: 1 })
+  assert.ok(current.includes('Waiting for your answer'))
+})
+
+test('SSR: a tool-approval card renders interactive controls when a session is present', () => {
+  const html = renderApproval!({
+    sessionId: 'sess-bot',
+    approval: {
+      requestId: 'approval-1',
+      sessionId: 'sess-bot',
+      toolName: 'bash',
+      callId: 'call_bash',
+      reason: 'Write a file outside the workspace',
+      state: 'open',
+    },
+  })
+  assert.ok(html.includes('data-kind="tool-approval"'))
+  assert.ok(html.includes('data-session="sess-bot"'))
+  assert.ok(html.includes('type="button"'))
+  assert.ok(html.includes('bash'))
+  assert.ok(html.includes('Write a file outside the workspace'))
+  assert.ok(html.includes('Allow once'))
+  assert.ok(!html.includes('Always allow'))
+  const current = renderCurrent!({
+    segments: [],
+    drafting: true,
+    currentTurn: 1,
+    pendingApprovals: [
+      {
+        requestId: 'approval-1',
+        sessionId: 'sess-bot',
+        toolName: 'bash',
+        reason: 'Write a file',
+        state: 'open',
+      },
+    ],
+  })
+  assert.ok(current.includes('Waiting for your answer'))
 })

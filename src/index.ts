@@ -9,6 +9,8 @@ import { followupDurable, liveAgent, logHasMessage, removePending } from './inbo
 import { createLogSource } from './log/source.ts'
 import { toolError } from './errors.ts'
 import { createQuestionAnswerer, publishQuestionAnswerer, questionAnswererFor } from './questions.ts'
+import { createApprovalAnswerer, publishApprovalAnswerer, approvalAnswererFor } from './approvals.ts'
+import { createAuthorizationController, publishAuthorization, authorizationFor } from './authorization.ts'
 import { publishRuntime, publishWorkRuntime, runtimeFor } from './runtime-registry.ts'
 import { type HostContext, type PluginHost } from './host.ts'
 import {
@@ -281,6 +283,20 @@ export function apply(ctx: PluginHost, config: FoundationsConfig = {}) {
   ctx.effect(() => questions.listen(ctx))
   ctx.effect(() => () => {
     if (questionAnswererFor(store.root) === questions) publishQuestionAnswerer(store.root, null)
+  })
+
+  const approvals = createApprovalAnswerer()
+  publishApprovalAnswerer(store.root, approvals)
+  ctx.effect(() => approvals.listen(ctx))
+  ctx.effect(() => () => {
+    if (approvalAnswererFor(store.root) === approvals) publishApprovalAnswerer(store.root, null)
+  })
+
+  const authorization = createAuthorizationController()
+  publishAuthorization(store.root, authorization)
+  ctx.effect(() => authorization.bind(ctx))
+  ctx.effect(() => () => {
+    if (authorizationFor(store.root) === authorization) publishAuthorization(store.root, null)
   })
 
   ctx.logger?.info?.(

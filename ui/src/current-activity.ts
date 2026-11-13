@@ -1,5 +1,6 @@
 import { OPEN_TOOL_STATES, redactText, toolPresentation, type ToolStatus } from './activity.ts'
-import { userQuestionView } from './user-question.ts'
+import { isAnswerableQuestion, userQuestionView } from './user-question.ts'
+import type { ToolApprovalView } from './tool-approval.ts'
 import { english, type Copy, type MessageKey } from './i18n/index.ts'
 import type { Segment } from './types.ts'
 import type { WorkTicket } from './work.ts'
@@ -10,6 +11,7 @@ export interface CurrentActivityInput {
   currentTurn?: number | null
   tickets?: readonly WorkTicket[]
   connectionPhase?: string
+  pendingApprovals?: readonly ToolApprovalView[]
   t?: Copy
 }
 
@@ -53,7 +55,7 @@ export function currentActivity(input: CurrentActivityInput): ActivitySummary | 
     if (segment.kind !== 'tool') continue
     const view = toolPresentation(segment, undefined, tickets)
     const question = userQuestionView(segment)
-    if (question?.state === 'open' && drafting && inCurrentTurn(segment.turn)) {
+    if (question && isAnswerableQuestion(question.state) && drafting && inCurrentTurn(segment.turn)) {
       unresolved.push({ text: t('question.waiting'), moving: true })
       continue
     }
@@ -72,6 +74,9 @@ export function currentActivity(input: CurrentActivityInput): ActivitySummary | 
     if (!OPEN_TOOL_STATES.has(view.status)) continue
     if (!drafting || !inCurrentTurn(segment.turn)) continue
     unresolved.push(item)
+  }
+  if (input.pendingApprovals?.some(item => item.state === 'open')) {
+    unresolved.push({ text: t('approval.waiting'), moving: true })
   }
   for (const ticket of tickets) {
     if (representedTickets.has(ticket.id) || SETTLED_TICKETS.has(ticket.status) || !OPEN_TICKETS.has(ticket.status))
