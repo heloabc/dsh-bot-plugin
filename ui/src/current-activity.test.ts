@@ -1,6 +1,7 @@
 import { strict as assert } from 'node:assert'
 import test from 'node:test'
 import { currentActivity } from './current-activity.ts'
+import { translate } from './i18n/index.ts'
 import { applyLogEvent } from './follow.ts'
 import { emptyThread, type ToolSegment, type ThreadState } from './types.ts'
 import { toolState } from './activity.ts'
@@ -62,7 +63,7 @@ test('composer does not revive an old turn or turn model narration into an execu
     currentActivity({
       segments: [{ kind: 'think', id: 't', text: 'Plan', running: true, seq: 1 }],
       drafting: true,
-      zh: true,
+      t: (key, vars) => translate('zh', key, vars),
     })?.text,
     '思考中',
   )

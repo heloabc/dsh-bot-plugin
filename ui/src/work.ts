@@ -1,6 +1,6 @@
 /** Ticket cards for the main transcript. Labels come from the active catalog. */
 
-import { english, type Copy, type MessageKey } from './i18n.ts'
+import { english, type Copy, type MessageKey } from './i18n/index.ts'
 
 export interface WorkEvent {
   eventId: string

@@ -9,7 +9,7 @@ Cordis plugin for the DSH bot. `@thready-web/dsh-bot` is the launcher that start
 | `@thready-web/dsh-bot-plugin/router` | Hash routing for the official web client |
 | `@thready-web/dsh-bot-plugin/cli` | Admin commands. The `dsh-bot` binary calls this. |
 
-Prompts, tool descriptions, and API messages are English. A stored persona may still start with a legacy CJK name label. New persona text uses `Name:`, `Style:`, and `Task:`. The workbench defaults to English. The language control switches the whole UI through the message catalog in `ui/src/i18n.ts`.
+Prompts, tool descriptions, and API messages are English. A stored persona may still start with a legacy CJK name label. New persona text uses `Name:`, `Style:`, and `Task:`. The workbench defaults to English. The language control switches the whole UI through the message catalog in `ui/src/i18n/`.
 
 ```bash
 npm install

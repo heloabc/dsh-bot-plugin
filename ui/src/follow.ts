@@ -476,7 +476,7 @@ function liveActivity(state: ThreadState): string {
     .find((item): item is ToolSegment => item.kind === 'tool' && ACTIVE_TOOL_STATES.has(toolState(item)))
   if (tool) {
     const detail = redactText(toolDetail(tool.name, tool.args))
-    const label = statusLabel(toolState(tool), false)
+    const label = statusLabel(toolState(tool))
     return detail ? `${label} · ${detail}` : label
   }
   if (state.segments.some(item => item.kind === 'assistant' && item.streaming)) return 'Replying'

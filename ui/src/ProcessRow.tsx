@@ -8,7 +8,7 @@ import { type ThinkSegment, type ToolSegment } from './types'
 
 export function ThinkRow({ segment }: { segment: ThinkSegment }) {
   const [open, setOpen] = useState(false)
-  const { locale } = useI18n()
+  const { t } = useI18n()
   return (
     <div className="official-row" data-variant="think" data-segment={segment.id}>
       <button type="button" className="official-title" aria-expanded={open} onClick={() => setOpen(!open)}>
@@ -16,9 +16,7 @@ export function ThinkRow({ segment }: { segment: ThinkSegment }) {
           <ThinkIcon />
           <Chevron />
         </span>
-        <span className="official-label">
-          {locale === 'zh' ? (segment.running ? '思考中' : '思考记录') : segment.running ? 'Thinking' : 'Reasoning'}
-        </span>
+        <span className="official-label">{segment.running ? t('activity.thinking') : t('activity.reasoning')}</span>
       </button>
       <Collapse open={open}>
         <div className="think-body">{redactText(segment.text)}</div>
@@ -41,8 +39,7 @@ export function ActivityGroup({
   cwd?: string
   connectionPhase?: string
 }) {
-  const { locale } = useI18n()
-  const zh = locale === 'zh'
+  const { t } = useI18n()
   const active =
     pending ||
     segments.some(s =>
@@ -52,10 +49,10 @@ export function ActivityGroup({
     .filter((s): s is ToolSegment => s.kind === 'tool')
     .map(s => toolPresentation(s, cwd, tickets).status)
   const counts = [
-    [zh ? '活动中' : 'Active', states.filter(state => OPEN_TOOL_STATES.has(state)).length],
-    [zh ? '失败' : 'Failed', states.filter(state => state === 'failed').length],
-    [zh ? '取消' : 'Cancelled', states.filter(state => state === 'cancelled').length],
-    [zh ? '未知' : 'Unknown', states.filter(state => state === 'unknown').length],
+    [t('activity.count.active'), states.filter(state => OPEN_TOOL_STATES.has(state)).length],
+    [t('activity.count.failed'), states.filter(state => state === 'failed').length],
+    [t('activity.count.cancelled'), states.filter(state => state === 'cancelled').length],
+    [t('activity.count.unknown'), states.filter(state => state === 'unknown').length],
   ]
     .filter(([, count]) => Number(count) > 0)
     .map(([label, count]) => `${label} ${count}`)
@@ -66,7 +63,7 @@ export function ActivityGroup({
   return (
     <section
       className={open ? 'activity-group open' : 'activity-group'}
-      aria-label={zh ? '活动' : 'Activity'}
+      aria-label={t('activity.title')}
       data-state={active ? 'running' : 'settled'}
       data-activity-start={segments[0]?.id}
     >
@@ -75,19 +72,13 @@ export function ActivityGroup({
           <ToolIcon />
           <Chevron />
         </span>
-        <span className="official-label">
-          {zh ? '活动' : 'Activity'} · {segments.length}
-        </span>
+        <span className="official-label">{t('activity.titleWithCount', { count: String(segments.length) })}</span>
         {counts ? <span className="activity-status">{counts}</span> : null}
         {stale ? (
           <span className="activity-status">
             {['restoring', 'connecting', 'syncing'].includes(connectionPhase ?? '')
-              ? zh
-                ? '正在恢复同步 · 最后已知状态'
-                : 'Resyncing · last known state'
-              : zh
-                ? '连接不可用 · 最后已知状态'
-                : 'Connection unavailable · last known state'}
+              ? t('activity.resyncing')
+              : t('activity.connectionLastKnown')}
           </span>
         ) : null}
       </button>
@@ -97,9 +88,7 @@ export function ActivityGroup({
           !segments.some(s =>
             s.kind === 'think' ? s.running : OPEN_TOOL_STATES.has(toolPresentation(s, cwd, tickets).status),
           ) ? (
-            <p className="activity-note">
-              {zh ? '正在生成回复；尚无新的工具执行证据' : 'Generating response; no new tool execution evidence'}
-            </p>
+            <p className="activity-note">{t('activity.generating')}</p>
           ) : null}
           {segments.map(segment =>
             segment.kind === 'think' ? (
@@ -147,15 +136,14 @@ export function ToolCallRowView({
   onArgsToggle,
 }: ToolRowProps & { open: boolean; argsOpen: boolean; onToggle: () => void; onArgsToggle: () => void }) {
   const id = useId()
-  const { locale } = useI18n()
-  const zh = locale === 'zh'
+  const { t, locale } = useI18n()
   const view = toolPresentation(segment, cwd, tickets)
   // The diff presenter receives only sanitized inputs too.
   const change = fileChange({ ...segment, args: view.args, result: view.output })
-  const fallback = isShell(segment.name) ? (zh ? '执行命令' : 'Run command') : view.title
+  const fallback = isShell(segment.name) ? t('activity.runCommand') : view.title
   const title =
     view.description ||
-    (view.todos.length ? (zh ? '更新计划' : 'Update plan') : '') ||
+    (view.todos.length ? t('activity.updatePlan') : '') ||
     (view.ticket ? redactText(view.ticket.summary) : '') ||
     change?.name ||
     fallback
@@ -177,8 +165,8 @@ export function ToolCallRowView({
           <span className="official-label">{title}</span>
           {exceptional ? (
             <span className="activity-status">
-              {statusLabel(view.status, zh)}
-              {stale ? (zh ? ' · 最后已知' : ' · last known') : ''}
+              {statusLabel(view.status, t)}
+              {stale ? t('activity.lastKnownSuffix') : ''}
             </span>
           ) : null}
         </>
@@ -187,14 +175,14 @@ export function ToolCallRowView({
       <div className="activity-detail">
         {view.status !== 'succeeded' && !exceptional ? (
           <p className="activity-note">
-            {statusLabel(view.status, zh)}
-            {stale ? (zh ? ' · 最后已知' : ' · last known') : ''}
+            {statusLabel(view.status, t)}
+            {stale ? t('activity.lastKnownSuffix') : ''}
           </p>
         ) : null}
         {view.todos.length ? (
           <p className="activity-note">
             {view.todos.filter(todo => todo.status === 'completed').length}/{view.todos.length}{' '}
-            {zh ? '项完成（计划记录）' : 'complete (plan record)'}
+            {t('activity.planComplete')}
           </p>
         ) : null}
         <div className="activity-facts">
@@ -209,28 +197,17 @@ export function ToolCallRowView({
         {view.cwd ? (
           <p className="activity-facts">
             {view.cwdSource === 'recorded'
-              ? zh
-                ? '执行记录目录'
-                : 'Recorded working directory'
+              ? t('activity.cwdRecorded')
               : view.cwdSource === 'requested'
-                ? zh
-                  ? '请求目录'
-                  : 'Requested working directory'
-                : zh
-                  ? '会话默认目录（非执行确认）'
-                  : 'Session default directory (not execution confirmation)'}
+                ? t('activity.cwdRequested')
+                : t('activity.cwdSessionDefault')}
             : {view.cwd}
           </p>
         ) : null}
-        {view.status === 'waiting' ? (
-          <p className="activity-note">
-            {zh ? '已收到调用请求；尚无进程启动确认' : 'Call requested; process start not confirmed'}
-          </p>
-        ) : null}
+        {view.status === 'waiting' ? <p className="activity-note">{t('activity.callRequested')}</p> : null}
         {view.jobId ? (
           <p className="activity-facts">
-            Job: {redactText(view.jobId)} ·{' '}
-            {zh ? '已登记，不代表完成或持续存活' : 'registered, not proof of completion or continued liveness'}
+            Job: {redactText(view.jobId)} · {t('activity.jobRegistered')}
           </p>
         ) : null}
         {view.ticketId ? (
@@ -241,7 +218,7 @@ export function ToolCallRowView({
         ) : null}
         {view.latestReport ? (
           <p className="activity-note">
-            {zh ? '最新报告' : 'Latest report'} (v{view.ticket?.revision}): {redactText(view.latestReport)}
+            {t('activity.latestReport')} (v{view.ticket?.revision}): {redactText(view.latestReport)}
           </p>
         ) : null}
         {view.todos.length ? (
@@ -255,9 +232,10 @@ export function ToolCallRowView({
         ) : null}
         {segment.requestedAt != null ? (
           <p className="activity-facts">
-            {zh ? '调用记录时间' : 'Call recorded'}: {new Date(segment.requestedAt).toLocaleString(zh ? 'zh-CN' : 'en')}
+            {t('activity.callRecorded')}:{' '}
+            {new Date(segment.requestedAt).toLocaleString(locale === 'zh' ? 'zh-CN' : 'en')}
             {segment.settledAt != null
-              ? ` · ${zh ? '调用等待耗时' : 'Call wait'}: ${Math.max(0, segment.settledAt - segment.requestedAt)}ms`
+              ? ` · ${t('activity.callWait')}: ${Math.max(0, segment.settledAt - segment.requestedAt)}ms`
               : ''}
           </p>
         ) : null}
@@ -274,7 +252,7 @@ export function ToolCallRowView({
                 <ToolIcon />
                 <Chevron />
               </span>
-              <span className="official-label">{zh ? '完整参数（已脱敏）' : 'Full arguments (redacted)'}</span>
+              <span className="official-label">{t('activity.fullArgs')}</span>
             </>
           }
         >
@@ -283,9 +261,9 @@ export function ToolCallRowView({
         </ActivityDisclosure>
         {segment.resultReceived || segment.result ? (
           <div className="activity-output">
-            <strong>{zh ? '工具返回（已脱敏）' : 'Tool result (redacted)'}</strong>
+            <strong>{t('activity.toolResult')}</strong>
             <CopyButton text={view.output} />
-            <pre>{view.output || (zh ? '（空结果）' : '(empty result)')}</pre>
+            <pre>{view.output || t('activity.emptyResult')}</pre>
           </div>
         ) : null}
       </div>

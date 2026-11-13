@@ -3,9 +3,9 @@ import { currentActivity, type CurrentActivityInput } from './current-activity'
 import { useI18n } from './locale'
 
 /** Compact composer status; the detailed event timeline stays in its original order. */
-export function CurrentActivity(props: Omit<CurrentActivityInput, 'zh'>) {
-  const { locale } = useI18n()
-  const summary = currentActivity({ ...props, zh: locale === 'zh' })
+export function CurrentActivity(props: Omit<CurrentActivityInput, 't'>) {
+  const { t } = useI18n()
+  const summary = currentActivity({ ...props, t })
   const [visible, setVisible] = useState(() => typeof document === 'undefined' || document.visibilityState !== 'hidden')
   useEffect(() => {
     const update = () => setVisible(document.visibilityState !== 'hidden')

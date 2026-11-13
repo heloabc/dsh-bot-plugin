@@ -1,4 +1,5 @@
 /** Evidence-based UI projection. Never interprets model prose as a process heartbeat. */
+import { english, type Copy, type MessageKey } from './i18n/index.ts'
 import type { ToolSegment } from './types.ts'
 import type { WorkTicket } from './work.ts'
 
@@ -113,19 +114,20 @@ export function toolState(tool: ToolSegment): ToolStatus {
   return tool.running ? 'waiting' : 'unknown'
 }
 
-export function statusLabel(state: ToolStatus, zh: boolean): string {
-  const labels: Record<ToolStatus, [string, string]> = {
-    preparing: ['Preparing call', '准备调用'],
-    waiting: ['Waiting for tool result', '等待工具结果'],
-    running: ['Running (confirmed)', '执行中（已确认）'],
-    worker: ['Waiting for Worker', '等待 Worker'],
-    background: ['Background job · last known state', '后台任务 · 最后已知状态'],
-    succeeded: ['Completed', '完成'],
-    failed: ['Failed', '失败'],
-    cancelled: ['Cancelled', '已取消'],
-    unknown: ['Outcome unknown', '结果未知'],
-  }
-  return labels[state][zh ? 1 : 0]
+const STATUS_KEY: Record<ToolStatus, MessageKey> = {
+  preparing: 'activity.status.preparing',
+  waiting: 'activity.status.waiting',
+  running: 'activity.status.running',
+  worker: 'activity.status.worker',
+  background: 'activity.status.backgroundDetail',
+  succeeded: 'activity.status.succeeded',
+  failed: 'activity.status.failed',
+  cancelled: 'activity.status.cancelled',
+  unknown: 'activity.status.unknown',
+}
+
+export function statusLabel(state: ToolStatus, t: Copy = english): string {
+  return t(STATUS_KEY[state])
 }
 
 export function toolPresentation(tool: ToolSegment, sessionCwd?: string, tickets: readonly WorkTicket[] = []) {
