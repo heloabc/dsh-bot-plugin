@@ -111,6 +111,18 @@ dsh-bot start --work-budget '{"perBot":1,"global":4}'
 
 `perBot` and `global` are already on the published launcher `--work-budget` allowlist. `perBotQueue` and `globalQueue` need a launcher that includes those keys; until then set the queue caps in `config.work` or `DSH_BOT_WORK_BUDGET` when starting `dsh` without the launcher flag.
 
+## Worker budget waiting
+
+A granted worker token/runtime cap pauses admission at the official asynchronous `agent/pre-step` waterfall. The listener waits on an abortable promise; it does not cancel the turn, refuse it as failed, spawn a replacement or invoke a model. A request/tool batch already admitted can finish (and overshoot a quota); no subsequent model request or tool batch is admitted until a sufficient explicit `foundations_grant`.
+
+The ticket retains its attempt, fencing token and child session. `budget_json.quota` durably records cumulative committed `usage.totalTokens`, deduplication sequence, active elapsed time, and requested/waiting phase. Active time includes finishing in-flight work until the safe boundary; suspended-boundary waiting time is excluded. Waiting is exempt from lease/enqueue expiry and has no hard-wall failure timer. It retains a worker slot to preserve capacity accounting; the main bot is not in this worker gate or slot pool and can always grant, deny or cancel. Explicit cancellation releases the slot normally.
+
+A grant adds amounts, never resets usage, and must exceed both current token usage and active time. An insufficient grant leaves the gate closed without another noisy extension event; its response includes usage, required totals, minimum additional amounts and administrative headroom. Host token/active-wall ceilings are never increased: an unextendable worker stays paused with `host-ceiling` diagnostics until an explicit decision/cancellation. This is not automatic host approval or unlimited renewal.
+
+Budget requests are urgent next-turn inbox notices, bypassing stale notice/user/delivery admission barriers without steering or interrupting the main turn. Admission is single-flight per owner and rechecks grant/cancellation races before persisting a notice. Ordinary progress retains its existing admission policy. The workbench labels suspended workers “Waiting for budget”.
+
+A process restart cannot preserve an in-memory DSH turn: the durable wait survives and reconciliation alone does not dispatch a model or recreate a child. In the resident host, a sufficient explicit grant durably queues one continuation input into the existing child session, preserving the ticket/attempt/fence and reporting `continuation: same-session-new-turn`, not falsely claiming seamless same-turn resumption. Only this detached continuation advances the input/briefing generation, fencing old disposed turn-end replay from new results. A runtime without this host capability reports `awaiting-host-turn` and keeps expiry protection until a real host boundary; mere restoration never wakes a model. Restoring a ticket never revives a previously failed/cancelled ticket. No automatic workspace recovery is performed.
+
 ## Session working directory
 
 Workbench sessions start in `THREADY_SESSION_CWD` when set, otherwise in `<DSH_HOME>/workspace` (created on first use), never in `DSH_HOME` itself, which holds the owner token and profiles.

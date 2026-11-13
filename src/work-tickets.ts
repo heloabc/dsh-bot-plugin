@@ -577,14 +577,17 @@ export function createTicketBook(db: SqlDatabase, root: string, now: () => Date 
     const token = (previous?.fencing_token ?? 0) + 1
     const attemptId = randomUUID()
     const next = ticket.revision + 1
+    const retryBudget = budgetObject(ticket)
+    delete retryBudget.quota
+    delete retryBudget.extension
     const info = db
       .prepare(`
       UPDATE work_tickets
-      SET revision = ?, briefing_revision = 1, status = 'accepted', review_status = 'none',
+      SET budget_json = ?, revision = ?, briefing_revision = 1, status = 'accepted', review_status = 'none',
           active_attempt_id = ?, cancel_requested_revision = NULL, updated_at = ?
       WHERE id = ? AND revision = ?
     `)
-      .run(next, attemptId, iso(), ticketId, expected)
+      .run(JSON.stringify(retryBudget), next, attemptId, iso(), ticketId, expected)
     if (info.changes !== 1) return { error: 'CAS_CONFLICT' }
     if (previous) {
       db.prepare(`UPDATE work_attempts SET status = 'superseded', ended_at = COALESCE(ended_at, ?) WHERE id = ?`).run(
@@ -777,7 +780,21 @@ export function createTicketBook(db: SqlDatabase, root: string, now: () => Date 
     if (wallMs === beforeWall && maxTokens === beforeTokens) {
       return { error: 'VALIDATION', message: 'Nothing more can be granted. The host ceiling is already used.' }
     }
-    const next = { ...budget, wallMs, maxTokens, extension: null }
+    const quota = budget.quota
+    const enough =
+      !quota?.waiting ||
+      (maxTokens > quota.tokens &&
+        wallMs > quota.activeMs &&
+        quota.tokens < ceilings.maxTokens &&
+        quota.activeMs < ceilings.wallMs)
+    const next = {
+      ...budget,
+      wallMs,
+      maxTokens,
+      extension: enough ? null : 'open',
+      // Only actual loop admission clears durable waiting. A crash after this
+      // grant transaction must not remove expiry protection before resumption.
+    }
     db.prepare(`UPDATE work_tickets SET budget_json = ?, updated_at = ? WHERE id = ?`).run(
       JSON.stringify(next),
       iso(),
@@ -852,6 +869,7 @@ export function createTicketBook(db: SqlDatabase, root: string, now: () => Date 
     `)
       .all()
     for (const item of running) {
+      if (budgetObject(item).quota?.waiting) continue
       if (
         item.ticket_status === 'started' &&
         item.attempt_status === 'started' &&
@@ -1037,6 +1055,8 @@ export function createTicketBook(db: SqlDatabase, root: string, now: () => Date 
     return visibleTickets(owner).map(item => ({
       id: item.id,
       status: item.status,
+      waiting_budget:
+        (item.status === 'started' || item.status === 'enqueued') && budgetObject(item).quota?.waiting === true,
       briefing_revision: item.briefing_revision,
       child_session_id: item.child_session_id,
       summary: readBriefing(item.briefing_hash).replace(/\s+/g, ' ').trim().slice(0, 80),
@@ -1069,7 +1089,7 @@ export function createTicketBook(db: SqlDatabase, root: string, now: () => Date 
   function signalMap() {
     const rows = db
       .prepare(`
-      SELECT owner_session_id, status FROM work_tickets
+      SELECT owner_session_id, status, budget_json FROM work_tickets
       WHERE status != 'delivered' AND status != 'cancelled'
       ORDER BY updated_at DESC
     `)
@@ -1079,7 +1099,11 @@ export function createTicketBook(db: SqlDatabase, root: string, now: () => Date 
     for (const item of rows) {
       const owner = item.owner_session_id
       const list = signals[owner] ?? []
-      list.push(item.status)
+      list.push(
+        (item.status === 'started' || item.status === 'enqueued') && budgetObject(item).quota?.waiting
+          ? 'waiting_budget'
+          : item.status,
+      )
       signals[owner] = list
     }
     return signals
@@ -1152,6 +1176,8 @@ export function createTicketBook(db: SqlDatabase, root: string, now: () => Date 
       ticket: {
         id: item.id,
         status: item.status,
+        waiting_budget:
+          (item.status === 'started' || item.status === 'enqueued') && budgetObject(item).quota?.waiting === true,
         briefing_revision: item.briefing_revision,
         child_session_id: item.child_session_id,
         active_attempt_id: item.active_attempt_id,

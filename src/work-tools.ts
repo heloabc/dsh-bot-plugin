@@ -97,7 +97,7 @@ export function workToolDefinitions(
     ),
     tool(
       'foundations_grant',
-      'Grant more time or tokens to an unfinished ticket. wallMs and maxTokens are amounts to add, not a new total. A budget-exhausted notice is not a failure. deny=true refuses the grant and stops this round.',
+      'Grant more active runtime or tokens to an unfinished ticket. wallMs and maxTokens are amounts to ADD, not totals. Exhausted workers wait at the next safe loop boundary without expiry. Use current usage/required totals and headroom in the notice/result: insufficient grants remain paused, host ceilings cannot be raised. deny=true stops this round; do not redispatch a replacement.',
       {
         type: 'object',
         properties: {

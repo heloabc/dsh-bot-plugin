@@ -82,6 +82,20 @@ async function* generate(options) {
     yield { type: 'finish', reason: { kind: 'tool-calls' } }
     return
   }
+  // Deterministic quota-loop fixture: first request consumes 2k and reports
+  // progress; after the gate resumes the next request reports the result.
+  const quotaHistory = JSON.stringify(messages)
+  if (!directed && options.purpose == null && quotaHistory.includes('FOUNDATIONS_QUOTA_LOOP') && !quotaHistory.includes('quota-finished')) {
+    const first = !quotaHistory.includes('quota-progress')
+    const args = JSON.stringify({ kind: first ? 'progress' : 'result', text: first ? 'quota-progress' : 'quota-finished' })
+    const id = `call_mock_quota_${Date.now()}`
+    yield { type: 'block-start', index: 0, blockType: 'tool-call' }
+    yield { type: 'tool-call-delta', index: 0, id, name: 'foundations_report', argumentsDelta: args }
+    yield { type: 'block-end', index: 0, block: { type: 'tool-call', id, name: 'foundations_report', arguments: args } }
+    yield { type: 'usage', usage: { inputTokens: first ? 1992 : 8, outputTokens: 8, totalTokens: first ? 2000 : 16 } }
+    yield { type: 'finish', reason: { kind: 'tool-calls' } }
+    return
+  }
   const briefingArgs = !directed && options.purpose == null && briefingIsLatest(messages)
     ? briefingReport(plainUserText(messages))
     : null

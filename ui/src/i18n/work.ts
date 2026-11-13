@@ -4,6 +4,9 @@ const en = {
   'work.status.accepted': 'Accepted',
   'work.status.enqueued': 'Enqueued',
   'work.status.started': 'Started',
+  'work.status.waitingBudget': 'Waiting for budget',
+  'work.fact.waitingBudget':
+    'Worker admission is paused pending a sufficient budget grant. Waiting time does not consume runtime.',
   'work.status.needs_user': 'Needs you',
   'work.status.ready': 'Candidate',
   'work.status.delivered': 'Delivered',
@@ -48,6 +51,8 @@ const zh: Record<keyof typeof en, string> = {
   'work.status.accepted': '已受理',
   'work.status.enqueued': '已派工',
   'work.status.started': '已开始',
+  'work.status.waitingBudget': '等待预算',
+  'work.fact.waitingBudget': 'Worker 已暂停下一步，等待足够的新预算；等待时间不计入运行时长。',
   'work.status.needs_user': '需要用户',
   'work.status.ready': '候选',
   'work.status.delivered': '已交付',

@@ -156,7 +156,7 @@ test('eval: three active tickets require an explicit budget and are not the prod
   ctx.close()
 })
 
-test('eval: one failure and one cancel leave the other ticket runnable', async () => {
+test('eval: one budget denial and one cancel leave the other ticket runnable', async () => {
   const ctx = boot({ perBot: 3, global: 3 })
   const jobs = []
   for (const key of ['keep', 'stop', 'drop']) {
@@ -176,6 +176,8 @@ test('eval: one failure and one cancel leave the other ticket runnable', async (
     )
   ctx.work.observeSession(drop.childSessionId, { type: 'turn/start', data: { turn: 2 } })
   ctx.scheduled()!.fn()
+  assert.equal(JSON.parse(ctx.work.detail(drop.ticketId)!.ticket.budget_json).quota.waiting, true)
+  await ctx.work.grant('bot-a', { ticketId: drop.ticketId, deny: true })
   assert.equal(ctx.work.detail(drop.ticketId)!.ticket.status, 'failed')
   assert.equal(ctx.work.detail(keep.ticketId)!.ticket.status, 'started')
   assert.equal(ctx.work.detail(stop.ticketId)!.ticket.status, 'started')

@@ -251,12 +251,19 @@ export function apply(ctx: PluginHost, config: FoundationsConfig = {}) {
     // step that already ended. A refused step ends the turn as `blocked`.
     ctx.on(
       'agent/pre-step',
-      (
-        payload: { agent?: { id?: string }; turn?: number; step?: number; messages?: unknown[] } | null,
+      async (
+        payload: {
+          agent?: { id?: string }
+          turn?: number
+          step?: number
+          messages?: unknown[]
+          signal?: AbortSignal
+        } | null,
         next: () => Promise<unknown>,
       ) => {
         const sessionId = payload?.agent?.id
         if (typeof sessionId !== 'string' || sessionId === '') return next()
+        if (!(await gate.waitForBudget(sessionId, payload?.signal))) return { kind: 'reject' }
         const decision = gate.gateStep(sessionId, {
           turn: payload?.turn,
           step: payload?.step,
@@ -388,6 +395,7 @@ function startWork(
     )
   }
   const work = createWorkRuntime(store, engine, {
+    resumePaused: true,
     budget: resolved.budget,
     log: (level, message) => {
       const sink = level === 'warn' ? (ctx.logger?.warn ?? ctx.logger?.info) : ctx.logger?.info
